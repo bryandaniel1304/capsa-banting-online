@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2a1840">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Capsa Banting Online</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage">
+
+  <!-- HOME -->
+  <section id="home" class="screen">
+    <div class="home-bg"></div>
+    <div class="home-wrap">
+      <div class="home-left">
+        <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">ONLINE</span></div>
+        <div class="profile">
+          <button id="avatarBtn" class="avatar big" aria-label="Ganti avatar"></button>
+          <input id="nameInput" maxlength="14" placeholder="Nama kamu" autocomplete="nickname">
+        </div>
+        <div id="avatarPicker" class="avatar-picker hidden"></div>
+        <div class="join-row">
+          <input id="codeInput" maxlength="5" placeholder="KODE MEJA" autocapitalize="characters">
+          <button id="joinBtn" class="btn green">Gabung</button>
+        </div>
+        <button id="rulesBtnHome" class="btn ghost small">❓ Aturan Main</button>
+      </div>
+      <div class="home-right">
+        <div class="tiers-title">Buat Meja Baru</div>
+        <div id="tiers" class="tiers"></div>
+        <div class="home-note">Chip virtual, tanpa uang sungguhan. Ajak teman dengan kode / link meja.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TABLE -->
+  <section id="table" class="screen hidden">
+    <div class="room-bg"></div>
+    <div class="board"><div class="suit-order">♠ &gt; ♥ &gt; ♣ &gt; ♦</div><div class="suit-order b">♠ &gt; ♥ &gt; ♣ &gt; ♦</div><div class="watermark">CAPSA</div></div>
+
+    <div class="topbar">
+      <button id="menuBtn" class="round-btn" aria-label="Menu">☰</button>
+      <button id="rulesBtn" class="round-btn" aria-label="Aturan">?</button>
+      <div class="room-info">
+        <div><span class="lbl">MEJA</span> <b id="roomCode">-----</b></div>
+        <div><span class="coin"></span> <b id="stakeLbl">40K</b></div>
+      </div>
+      <button id="shareBtn" class="pill">🔗 Undang</button>
+    </div>
+    <div class="topright">
+      <button id="soundBtn" class="round-btn" aria-label="Suara">🔊</button>
+    </div>
+
+    <div id="pot" class="pot"><span class="pot-lbl">TARUHAN</span><span id="potVal">40K</span></div>
+
+    <div id="seat1" class="seat right"></div>
+    <div id="seat2" class="seat top"></div>
+    <div id="seat3" class="seat left"></div>
+    <div id="seat0" class="seat me"></div>
+
+    <div id="center" class="center"></div>
+    <div id="banner" class="combo-banner"></div>
+    <div id="hints" class="hints"></div>
+
+    <div id="lobbyPanel" class="lobby-panel hidden"></div>
+
+    <div id="hand" class="hand"></div>
+
+    <div id="actions" class="actions hidden">
+      <button id="passBtn" class="btn orange act">✋ Lewat</button>
+      <div class="clock"><span id="clockNum">20</span></div>
+      <button id="playBtn" class="btn green act">🂠 Buang</button>
+    </div>
+
+    <div class="side-btns">
+      <button id="sortBtn" class="round-btn big" aria-label="Urutkan">⇅</button>
+      <button id="chatBtn" class="round-btn" aria-label="Chat">💬</button>
+    </div>
+    <div id="chatMenu" class="chat-menu hidden"></div>
+
+    <div id="result" class="overlay hidden"></div>
+    <div id="menu" class="overlay hidden">
+      <div class="dialog">
+        <div class="dlg-title">Menu</div>
+        <button id="leaveBtn" class="btn red">Keluar Meja</button>
+        <button id="fsBtn" class="btn ghost">⛶ Layar Penuh</button>
+        <button id="closeMenu" class="btn ghost">Tutup</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="rules" class="overlay hidden"></div>
+  <div id="toasts"></div>
+  <div id="conn" class="conn hidden">Menghubungkan…</div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="rules.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
