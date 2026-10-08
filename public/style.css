@@ -413,3 +413,17 @@ table.hist td.det { text-align: left; white-space: normal; font-size: calc(var(-
 .dm-form { display: flex; gap: calc(var(--u)*1.5); padding: calc(var(--u)*1.5) calc(var(--u)*3); border-top: 2px solid #f0dcbc; }
 .center { text-align: center; }
 .topright .pill { font-size: calc(var(--u)*3.1); padding: calc(var(--u)*.7) calc(var(--u)*2.2); }
+
+/* result rows: keep the point columns inside the frame even with 13 cards left */
+.result-box { max-width: 92%; }
+.rrow { grid-template-columns: calc(var(--u)*11) minmax(0, 1fr) minmax(0, max-content) calc(var(--u)*19) calc(var(--u)*19); gap: calc(var(--u)*2); }
+.rrow > * { min-width: 0; }
+.rrow > div:nth-child(3) { overflow: hidden; display: flex; justify-content: flex-end; }
+.rrow .mini .card + .card { margin-left: calc(var(--u)*-3.4); }
+.rrow .rn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rrow .rl { line-height: 1.25; overflow-wrap: anywhere; }
+.rrow .delta { font-size: calc(var(--u)*4.6); white-space: nowrap; }
+.rrow .delta.tot { font-size: calc(var(--u)*5); }
+.rrow .delta small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.result-foot { padding-left: calc(var(--u)*4); padding-right: calc(var(--u)*4); flex-wrap: wrap; gap: calc(var(--u)*2); }
+.result-foot .wait { flex: 1 1 auto; min-width: 0; }
