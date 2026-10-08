@@ -141,11 +141,31 @@
     });
   }
   socket.on('connect', () => {
-    $('#conn').classList.add('hidden');
+    connOk();
     if (voice.on) { voiceStop(true); toast('Voice terputus, ketuk 🎤 untuk sambung lagi'); }
     hello();
   });
-  socket.on('disconnect', () => $('#conn').classList.remove('hidden'));
+  // Connection lost: socket.io keeps retrying; the game is saved on the server, so the player lands back in it.
+  let connTimers = [];
+  function connOk() { connTimers.forEach(clearTimeout); connTimers = []; $('#conn').classList.add('hidden'); }
+  function connLost() {
+    const el = $('#conn');
+    el.innerHTML = '<b>Koneksi terputus.</b> Menyambung ulang…';
+    el.classList.remove('hidden');
+    connTimers.forEach(clearTimeout);
+    connTimers = [
+      setTimeout(() => (el.innerHTML = '<b>Menyambung ulang…</b> Server mungkin sedang bangun (±1 menit). Permainanmu tersimpan dan akan dilanjutkan.'), 6000),
+      setTimeout(() => {
+        el.innerHTML = '<b>Masih menyambung…</b> Permainanmu tersimpan. <button id="connReload" class="pill">↻ Muat ulang</button>';
+        $('#connReload').onclick = () => location.reload();
+      }, 30000),
+    ];
+  }
+  socket.on('disconnect', connLost);
+  socket.io.on('reconnect_attempt', () => { if (!socket.connected && $('#conn').classList.contains('hidden')) connLost(); });
+
+  // Keep the free server awake while the app is open (Render sleeps without HTTP traffic).
+  setInterval(() => { if (!document.hidden) fetch('/healthz', { cache: 'no-store' }).catch(() => {}); }, 4 * 60000);
   socket.on('toast', ({ msg, error }) => toast(msg, error));
   socket.on('kicked', () => { V = null; toast('Kamu dikeluarkan dari meja', true); setRoomUrl(null); showHome(); });
   let leftCode = null; // ignore late updates from a table we just left
@@ -437,7 +457,14 @@
   }
 
   // hand: keep the player's own ordering stable between updates
+  // remember a hand arranged by hand, so a reload / reconnect keeps it
+  const handKey = () => (V ? V.code + ':' + V.gameNo : '');
+  function saveHandOrder() { if (V) store.set('hand', { key: handKey(), order: handOrder }); }
   function syncHandOrder() {
+    if (!handOrder.length) {
+      const saved = store.get('hand', null);
+      if (saved && saved.key === handKey()) handOrder = saved.order.filter((c) => (V.hand || []).includes(c));
+    }
     const hand = V.hand || [];
     const set = new Set(hand);
     handOrder = handOrder.filter((c) => set.has(c));
@@ -510,7 +537,7 @@
   function endPress(e, cancelled) {
     if (!press || (e && e.pointerId !== press.pointerId)) return;
     const p = press; press = null;
-    if (p.moving) { p.el.classList.remove('dragging'); sortMode = 'custom'; pendingHand = false; renderHand(); }
+    if (p.moving) { p.el.classList.remove('dragging'); sortMode = 'custom'; saveHandOrder(); pendingHand = false; renderHand(); }
     else if (!cancelled) { toggleCard(p.el); sfx.tick(); }
     if (pendingHand) { pendingHand = false; renderHand(); }
   }
@@ -588,6 +615,7 @@
     sortMode = sortMode === 'rank' ? 'suit' : 'rank';
     store.set('sort', sortMode);
     handOrder = R.sortHand(handOrder, sortMode);
+    saveHandOrder();
     toast(sortMode === 'rank' ? 'Urutkan: nilai' : 'Urutkan: jenis');
     renderHand();
   };

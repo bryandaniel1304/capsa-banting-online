@@ -433,3 +433,6 @@ table.hist td.det { text-align: left; white-space: normal; font-size: calc(var(-
 .tier .fit { display: block; white-space: nowrap; overflow: hidden; padding: 0 calc(var(--u)*.8); }
 .tier .t-range { display: flex; flex-direction: column; line-height: 1.15; padding: calc(var(--u)*.4) 0 calc(var(--u)*1.2); font-size: calc(var(--u)*2.9); }
 .tier .t-stake { font-size: calc(var(--u)*4.8); }
+
+.conn { max-width: 80%; text-align: center; line-height: 1.35; padding: calc(var(--u)*1) calc(var(--u)*4); border-radius: calc(var(--u)*3); background: rgba(200,50,40,.95); box-shadow: 0 4px 14px #0007; }
+.conn .pill { margin-left: calc(var(--u)*1.5); background: #fff; color: #b52828; box-shadow: none; }

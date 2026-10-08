@@ -80,6 +80,12 @@ const SCHEMA = [
   )`,
   'create index if not exists messages_pair on messages(from_id, to_id, id)',
   'create index if not exists messages_unread on messages(to_id, read_at)',
+  // live tables, so games survive server restarts / deploys / sleeping instances
+  `create table if not exists live_rooms (
+    code text primary key,
+    data jsonb not null,
+    updated_at timestamptz not null default now()
+  )`,
 ];
 
 let db = null;
@@ -267,7 +273,26 @@ async function markRead(me, other) {
   await q('update messages set read_at = now() where to_id = $1 and from_id = $2 and read_at is null', [me, other]);
 }
 
+// ---------- live rooms ----------
+const parseJson = (d) => (typeof d === 'string' ? JSON.parse(d) : d);
+async function saveLiveRoom(code, json) {
+  await q(`insert into live_rooms (code, data, updated_at) values ($1, $2::jsonb, now())
+           on conflict (code) do update set data = excluded.data, updated_at = now()`, [code, json]);
+}
+async function deleteLiveRoom(code) { await q('delete from live_rooms where code = $1', [code]); }
+async function liveRoomByCode(code) {
+  const r = await one("select data from live_rooms where code = $1 and updated_at > now() - interval '12 hours'", [code]);
+  return r && parseJson(r.data);
+}
+async function liveRoomForPlayer(token) {
+  const r = await one(`select data from live_rooms where updated_at > now() - interval '12 hours'
+                       and data->'seats' @> $1::jsonb order by updated_at desc limit 1`, [JSON.stringify([{ token }])]);
+  return r && parseJson(r.data);
+}
+async function pruneLiveRooms() { await q("delete from live_rooms where updated_at < now() - interval '24 hours'"); }
+
 module.exports = {
+  saveLiveRoom, deleteLiveRoom, liveRoomByCode, liveRoomForPlayer, pruneLiveRooms,
   requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,
   init, kind: () => db && db.kind,
   findUserByUsername, createUser, updateUser, createSession, userByToken, deleteSession,

@@ -9,6 +9,8 @@ const accounts = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 const TURN_MS = 20000;
+const RECONNECT_GRACE_MS = 90000; // after a server restart, give players time to come back before auto-playing
+const AWAY_AUTO_MS = 60000; // a player away longer than this gets auto-played quickly
 const MULTS = [250, 500, 1000, 2000];
 const MAX_MULT = 1000000;
 const BOT_NAMES = ['Budi', 'Sari', 'Joko', 'Rina', 'Agus', 'Dewi', 'Tono', 'Lina'];
@@ -103,7 +105,69 @@ function removePlayer(room, seat) {
 
 function destroyRoom(room) {
   clearTimeout(room.timer); clearTimeout(room.botTimer);
+  clearTimeout(saveTimers.get(room.code)); saveTimers.delete(room.code);
   rooms.delete(room.code);
+  liveTask(room, () => store.deleteLiveRoom(room.code));
+}
+
+// ---------- live room persistence: tables survive restarts, deploys and sleeping instances ----------
+const saveTimers = new Map();
+function liveTask(room, fn) {
+  room.liveChain = (room.liveChain || Promise.resolve()).then(fn).catch((e) => console.error('live room', room.code, e.message));
+  return room.liveChain;
+}
+function serializeRoom(room) {
+  return JSON.stringify({
+    v: 1, code: room.code, mult: room.mult, hostToken: room.hostToken, state: room.state, gameNo: room.gameNo,
+    lastWinner: room.lastWinner, created: room.created, history: room.history, result: room.result, final: room.final,
+    endVote: room.endVote, matchId: room.match.id, game: room.game,
+    seats: room.seats.map((p) => p && {
+      token: p.token, userId: p.userId || null, name: p.name, avatar: p.avatar, bot: !!p.bot,
+      score: p.score || 0, games: p.games || 0, wins: p.wins || 0, ready: !!p.ready,
+    }),
+  });
+}
+function saveRoomSoon(room) {
+  if (saveTimers.has(room.code)) return;
+  saveTimers.set(room.code, setTimeout(() => {
+    saveTimers.delete(room.code);
+    if (!rooms.has(room.code)) return;
+    let json;
+    try { json = serializeRoom(room); } catch (e) { return console.error('serialize', room.code, e.message); }
+    liveTask(room, () => store.saveLiveRoom(room.code, json));
+  }, 300));
+}
+function restoreRoom(d) {
+  if (rooms.has(d.code)) return rooms.get(d.code);
+  const now = Date.now();
+  const room = {
+    code: d.code, mult: d.mult, hostToken: d.hostToken, seats: [null, null, null, null], state: d.state,
+    game: d.game, result: d.result, lastWinner: d.lastWinner, gameNo: d.gameNo || 0, timer: null, botTimer: null,
+    created: d.created || now, lastActive: now, graceUntil: now + RECONNECT_GRACE_MS,
+    history: d.history || [], endVote: d.endVote || null, final: d.final || null,
+    match: { id: d.matchId || null }, dbChain: Promise.resolve(),
+  };
+  (d.seats || []).forEach((sp, i) => {
+    if (!sp) return;
+    const p = { ...sp, seat: i, connected: !!sp.bot, socketId: null, voice: false, muted: false, awaySince: now };
+    room.seats[i] = p;
+    if (!p.bot) tokenRoom.set(p.token, room.code);
+  });
+  rooms.set(room.code, room);
+  if (room.state === 'playing' && room.game) {
+    room.game.deadline = Math.max(now + TURN_MS, room.graceUntil);
+    armTurn(room);
+  }
+  console.log('restored table', room.code, room.state, 'game', room.gameNo);
+  return room;
+}
+async function restoreForPlayer(token) {
+  try { const d = await store.liveRoomForPlayer(token); return d ? restoreRoom(d) : null; }
+  catch (e) { console.error('restore', e.message); return null; }
+}
+async function restoreByCode(code) {
+  try { const d = await store.liveRoomByCode(code); return d ? restoreRoom(d) : null; }
+  catch (e) { console.error('restore', e.message); return null; }
 }
 
 // ---------- game flow ----------
@@ -143,13 +207,25 @@ function startGame(room) {
 
 function startTurn(room) {
   const g = room.game;
-  clearTimeout(room.timer); clearTimeout(room.botTimer);
-  g.deadline = Date.now() + TURN_MS;
+  const now = Date.now();
+  g.deadline = now + TURN_MS;
   const p = room.seats[g.turn];
-  room.timer = setTimeout(() => autoAct(room), TURN_MS + 300);
-  if (p && p.bot) room.botTimer = setTimeout(() => botAct(room), 900 + Math.random() * 1300);
-  else if (p && !p.connected) room.botTimer = setTimeout(() => autoAct(room), 2500);
+  // right after a restart, a player who hasn't reconnected yet keeps their turn until the grace period ends
+  if (p && !p.bot && !p.connected && room.graceUntil > now) g.deadline = Math.max(g.deadline, room.graceUntil);
+  armTurn(room);
   broadcast(room);
+}
+
+// (Re)arm the timers for the current turn from g.deadline.
+function armTurn(room) {
+  const g = room.game;
+  clearTimeout(room.timer); clearTimeout(room.botTimer);
+  const p = room.seats[g.turn];
+  room.timer = setTimeout(() => autoAct(room), Math.max(0, g.deadline - Date.now()) + 300);
+  if (p && p.bot) room.botTimer = setTimeout(() => botAct(room), 900 + Math.random() * 1300);
+  else if (p && !p.connected && !(room.graceUntil > Date.now()) && Date.now() - (p.awaySince || 0) > AWAY_AUTO_MS) {
+    room.botTimer = setTimeout(() => autoAct(room), 2500); // long gone: don't make everyone wait
+  }
 }
 
 function doPlay(room, seat, cards) {
@@ -419,9 +495,12 @@ function viewFor(room, token) {
 }
 
 function broadcast(room) {
+  let anyone = false;
   for (const p of room.seats) {
-    if (p && !p.bot && p.socketId) io.to(p.socketId).emit('state', viewFor(room, p.token));
+    if (p && !p.bot && p.socketId) { anyone = true; io.to(p.socketId).emit('state', viewFor(room, p.token)); }
   }
+  if (anyone) room.lastActive = Date.now();
+  saveRoomSoon(room);
 }
 
 // ---------- sockets ----------
@@ -437,7 +516,7 @@ io.on('connection', (socket) => {
 
   function attach(room, p) {
     if (p.voice && p.socketId !== socket.id) voiceLeave(room, p); // voice connections belong to the old socket
-    p.socketId = socket.id; p.connected = true;
+    p.socketId = socket.id; p.connected = true; p.awaySince = null;
     socket.join(room.code);
     broadcast(room);
     notifyPresence(p.userId);
@@ -529,7 +608,8 @@ io.on('connection', (socket) => {
     if (!user) return ack(cb, { room: null, user: null });
     socket.join('user:' + user.id);
     notifyPresence(user.id);
-    const room = roomOf();
+    // after a restart the table may only exist in the database: bring it back
+    const room = roomOf() || (await restoreForPlayer(token));
     const p = room && room.seats[seatOf(room, token)];
     if (p) { p.name = clean(user.name, 14) || p.name; p.avatar = user.avatar || p.avatar; attach(room, p); return ack(cb, { room: room.code, user }); }
     ack(cb, { room: null, user });
@@ -546,9 +626,10 @@ io.on('connection', (socket) => {
     ack(cb, { room: room.code });
   });
 
-  socket.on('join', ({ code } = {}, cb) => {
+  socket.on('join', async ({ code } = {}, cb) => {
     if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
-    const room = rooms.get(clean(code, 8).toUpperCase());
+    const want = clean(code, 8).toUpperCase();
+    const room = rooms.get(want) || (await restoreByCode(want));
     if (!room) return ack(cb, { error: 'Meja tidak ditemukan' });
     const existing = seatOf(room, token);
     if (existing >= 0) { attach(room, room.seats[existing]); return ack(cb, { room: room.code }); }
@@ -688,25 +769,57 @@ io.on('connection', (socket) => {
     const p = room.seats[seatOf(room, token)];
     if (!p || p.socketId !== socket.id) return;
     voiceLeave(room, p);
-    p.connected = false; p.socketId = null;
+    p.connected = false; p.socketId = null; p.awaySince = Date.now();
     broadcast(room);
-    if (room.state === 'playing' && room.game.turn === p.seat) {
-      clearTimeout(room.botTimer); room.botTimer = setTimeout(() => autoAct(room), 2500);
-    }
-    // drop players who stay away from a table that is not mid-game
+    // a disconnected player keeps their seat, cards and points; their turn simply runs on the normal timer.
+    // Only free a seat at a fresh table where nothing has been played yet.
     setTimeout(() => {
       if (!rooms.has(room.code) || p.connected || room.seats[p.seat] !== p) return;
-      if (room.state !== 'playing') { removePlayer(room, p.seat); if (rooms.has(room.code)) broadcast(room); }
+      if (room.state === 'lobby' && !room.history.length) { removePlayer(room, p.seat); if (rooms.has(room.code)) broadcast(room); }
     }, 120000);
   });
 });
 
-// sweep abandoned rooms
+// sweep tables nobody has been connected to for a while (they stay restorable from the database for 12h)
 setInterval(() => {
   for (const room of rooms.values()) {
-    if (!room.seats.some((p) => p && !p.bot && p.connected) && Date.now() - room.created > 30 * 60000) destroyRoom(room);
+    if (room.seats.some((p) => p && !p.bot && p.connected)) continue;
+    if (Date.now() - (room.lastActive || room.created) > 30 * 60000) {
+      clearTimeout(room.timer); clearTimeout(room.botTimer);
+      rooms.delete(room.code); // unload from memory only; the saved copy can still be restored
+    }
   }
 }, 60000);
+setInterval(() => store.pruneLiveRooms().catch((e) => console.error('prune', e.message)), 60 * 60000);
+
+// Render's free plan sleeps after ~15 min without HTTP traffic (websocket frames may not count),
+// so ping ourselves while anyone is at a table.
+setInterval(() => {
+  const url = process.env.RENDER_EXTERNAL_URL;
+  if (!url) return;
+  const active = [...rooms.values()].some((r) => r.seats.some((p) => p && !p.bot && p.connected));
+  if (active) fetch(url + '/healthz?keepalive=1').catch(() => {});
+}, 4 * 60000);
+
+// On shutdown (deploy / restart) write every table to the database right away.
+async function flushRooms() {
+  const jobs = [];
+  for (const room of rooms.values()) {
+    clearTimeout(saveTimers.get(room.code)); saveTimers.delete(room.code);
+    try { const json = serializeRoom(room); jobs.push(liveTask(room, () => store.saveLiveRoom(room.code, json))); } catch {}
+  }
+  await Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, 4000))]);
+}
+let shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(sig + ': saving ' + rooms.size + ' table(s)');
+    await flushRooms();
+    process.exit(0);
+  });
+}
 
 // keep the game server alive on unexpected async errors (log them instead)
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message ? e.message : e));
