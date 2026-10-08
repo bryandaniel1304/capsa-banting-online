@@ -708,6 +708,10 @@ setInterval(() => {
   }
 }, 60000);
 
+// keep the game server alive on unexpected async errors (log them instead)
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message ? e.message : e));
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e && e.stack ? e.stack : e));
+
 store.init().then((kind) => {
   if (kind === 'pglite') console.log('Database: embedded PGlite (~/.capsa-banting-online). Set DATABASE_URL to use Postgres in production.');
   else console.log('Database: Postgres');

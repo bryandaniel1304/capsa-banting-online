@@ -91,7 +91,11 @@ async function init() {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },
       max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
     });
+    // poolers close idle connections; log instead of crashing the process
+    pool.on('error', (e) => console.error('pg pool error:', e.message));
     // tables live in their own schema so Supabase's public REST API never exposes them
     const schema = process.env.DB_SCHEMA || 'capsa';
     if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('Invalid DB_SCHEMA');
