@@ -427,3 +427,9 @@ table.hist td.det { text-align: left; white-space: normal; font-size: calc(var(-
 .rrow .delta small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .result-foot { padding-left: calc(var(--u)*4); padding-right: calc(var(--u)*4); flex-wrap: wrap; gap: calc(var(--u)*2); }
 .result-foot .wait { flex: 1 1 auto; min-width: 0; }
+
+/* tier cards: text always fits (fitText shrinks it when needed) */
+.tier { min-width: 0; }
+.tier .fit { display: block; white-space: nowrap; overflow: hidden; padding: 0 calc(var(--u)*.8); }
+.tier .t-range { display: flex; flex-direction: column; line-height: 1.15; padding: calc(var(--u)*.4) 0 calc(var(--u)*1.2); font-size: calc(var(--u)*2.9); }
+.tier .t-stake { font-size: calc(var(--u)*4.8); }

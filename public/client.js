@@ -36,6 +36,16 @@
   // ---------- layout: always landscape ----------
   // Phones held upright get the table rotated; a tall desktop window gets a centered landscape table instead.
   const touch = window.matchMedia('(pointer: coarse)').matches;
+  // Shrink text that doesn't fit its box (tier cards etc.) so nothing is ever cut off.
+  function fitText(root = document) {
+    root.querySelectorAll('.fit').forEach((el) => {
+      el.style.fontSize = '';
+      if (!el.clientWidth) return; // not visible yet
+      let size = parseFloat(getComputedStyle(el).fontSize);
+      const min = size * 0.5;
+      while (el.scrollWidth > el.clientWidth + 0.5 && size > min) { size -= 0.5; el.style.fontSize = size + 'px'; }
+    });
+  }
   function layout() {
     const w = window.innerWidth, h = window.innerHeight;
     const portrait = h > w;
@@ -50,6 +60,7 @@
     const u = Math.min(H / 100, W / 190);
     stage.style.setProperty('--u', u.toFixed(3) + 'px');
     if (V) renderHand();
+    requestAnimationFrame(() => fitText());
   }
   window.addEventListener('resize', layout);
   if (window.ResizeObserver) new ResizeObserver(() => layout()).observe(document.documentElement);
@@ -189,6 +200,7 @@
     $('#home').classList.remove('hidden');
     $('#table').classList.add('hidden');
     renderAccount();
+    requestAnimationFrame(() => fitText($('#home')));
   }
   const stat = (label, value) => '<div class="st"><b>' + value + '</b><span>' + label + '</span></div>';
   const statsHTML = (s) => stat('Game', s.games || 0) + stat('Menang', s.wins || 0) + stat('Total poin', pts(s.points || 0)) +
@@ -250,7 +262,8 @@
     $('#table').classList.remove('hidden');
   }
   $('#tiers').innerHTML = TIERS.map((t) =>
-    '<button class="tier" data-mult="' + t.mult + '"><div class="t-head">' + t.name + '</div><div class="t-art">' + t.art + '</div><div class="t-stake">' + (t.mult ? 'x' + num(t.mult) : 'x ?') + '</div><div class="t-range">' + (t.mult ? '1 poin = ' + num(t.mult) : 'Atur sendiri') + '</div></button>').join('');
+    '<button class="tier" data-mult="' + t.mult + '"><div class="t-head">' + t.name + '</div><div class="t-art">' + t.art + '</div><div class="t-stake">' + (t.mult ? 'x' + num(t.mult) : 'x ?') + '</div><div class="t-range">' + (t.mult ? '<span class="fit">1 poin</span><span class="fit">= ' + num(t.mult) + '</span>' : '<span class="fit">Atur</span><span class="fit">sendiri</span>') + '</div></button>').join('');
+  $('#tiers').querySelectorAll('.t-head, .t-stake').forEach((el) => el.classList.add('fit'));
   // In-page dialogs: native confirm()/prompt() are blocked in many in-app browsers.
   function ask({ title, text, input, numeric = true, ok = 'Ya', cancel = 'Batal' }) {
     return new Promise((resolve) => {
@@ -1177,4 +1190,5 @@
 
   layout();
   showHome();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitText()); // web font changes text widths
 })();
