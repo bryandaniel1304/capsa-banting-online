@@ -33,7 +33,10 @@ function throttled(ip) {
 const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
 const cleanName = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 14);
 
-function router() {
+// hooks: presenceOf(userId) -> { online, room, state }, emitToUser(userId, event, data)
+function router(hooks = {}) {
+  const presenceOf = hooks.presenceOf || (() => ({ online: false }));
+  const emitToUser = hooks.emitToUser || (() => {});
   const r = express.Router();
   r.use(express.json({ limit: '10kb' }));
 
@@ -101,6 +104,91 @@ function router() {
       if (!d) return res.status(404).json({ error: 'Riwayat tidak ditemukan' });
       res.json(d);
     } catch (e) { next(e); }
+  });
+
+  // ---------- friends ----------
+  const idParam = (req) => parseInt(req.params.id, 10) || 0;
+  const changed = (...ids) => ids.forEach((id) => emitToUser(id, 'friends:update', {}));
+
+  r.get('/friends', auth, async (req, res, next) => {
+    try {
+      const rows = await store.listFriends(req.user.id);
+      const out = { friends: [], incoming: [], outgoing: [] };
+      for (const f of rows) {
+        const item = { id: f.id, username: f.username, name: f.name, avatar: f.avatar, unread: f.unread };
+        if (f.status === 'accepted') out.friends.push({ ...item, presence: presenceOf(f.id) });
+        else if (f.outgoing) out.outgoing.push(item);
+        else out.incoming.push(item);
+      }
+      out.friends.sort((a, b) => (b.presence.online - a.presence.online) || a.name.localeCompare(b.name));
+      res.json(out);
+    } catch (e) { next(e); }
+  });
+
+  r.post('/friends', auth, async (req, res, next) => {
+    try {
+      const other = await store.findUserByUsername(String((req.body || {}).username || '').trim().replace(/^@/, ''));
+      if (!other) return res.status(404).json({ error: 'Username tidak ditemukan' });
+      if (other.id === req.user.id) return res.status(400).json({ error: 'Itu username kamu sendiri' });
+      const status = await store.requestFriend(req.user.id, other.id);
+      changed(req.user.id, other.id);
+      const msg = { pending: 'Permintaan pertemanan dikirim ke @' + other.username, accepted: 'Kamu sekarang berteman dengan ' + other.name, already: 'Sudah berteman dengan ' + other.name };
+      if (status === 'pending') emitToUser(other.id, 'friends:request', { from: { id: req.user.id, name: req.user.name, username: req.user.username } });
+      res.json({ status, message: msg[status] });
+    } catch (e) { next(e); }
+  });
+
+  r.post('/friends/:id/accept', auth, async (req, res, next) => {
+    try {
+      const ok = await store.acceptFriend(req.user.id, idParam(req));
+      if (!ok) return res.status(404).json({ error: 'Permintaan tidak ditemukan' });
+      changed(req.user.id, idParam(req));
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
+  r.delete('/friends/:id', auth, async (req, res, next) => {
+    try {
+      await store.removeFriend(req.user.id, idParam(req));
+      changed(req.user.id, idParam(req));
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- direct messages (friends only) ----------
+  r.get('/messages/:id', auth, async (req, res, next) => {
+    try {
+      const other = idParam(req);
+      if (!(await store.areFriends(req.user.id, other))) return res.status(403).json({ error: 'Hanya bisa chat dengan teman' });
+      const list = await store.messages(req.user.id, other, parseInt(req.query.before, 10) || null);
+      await store.markRead(req.user.id, other);
+      res.json({ messages: list });
+    } catch (e) { next(e); }
+  });
+
+  r.post('/messages/:id', auth, async (req, res, next) => {
+    try {
+      const other = idParam(req);
+      const body = String((req.body || {}).body || '').trim().slice(0, 500);
+      if (!body) return res.status(400).json({ error: 'Pesan kosong' });
+      if (!(await store.areFriends(req.user.id, other))) return res.status(403).json({ error: 'Hanya bisa chat dengan teman' });
+      const m = await store.addMessage(req.user.id, other, body);
+      const payload = { ...m, from: { id: req.user.id, name: req.user.name, avatar: req.user.avatar } };
+      emitToUser(other, 'dm', payload);
+      emitToUser(req.user.id, 'dm', payload);
+      res.json({ message: m });
+    } catch (e) { next(e); }
+  });
+
+  r.post('/messages/:id/read', auth, async (req, res, next) => {
+    try { await store.markRead(req.user.id, idParam(req)); res.json({ ok: true }); } catch (e) { next(e); }
+  });
+
+  // ---------- voice chat ICE servers (STUN by default; set ICE_SERVERS to a JSON array to add TURN) ----------
+  r.get('/ice', (req, res) => {
+    let servers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+    try { if (process.env.ICE_SERVERS) servers = JSON.parse(process.env.ICE_SERVERS); } catch { console.error('Invalid ICE_SERVERS'); }
+    res.json({ iceServers: servers });
   });
 
   r.use((err, req, res, _next) => {

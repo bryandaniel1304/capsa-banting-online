@@ -56,6 +56,16 @@ Storage:
 - **Production (Render):** set `DATABASE_URL` to a Postgres connection string (e.g. Supabase, free). Tables are created automatically on start.
   Render's free disk is wiped on every restart/deploy, so a real database is required online.
 
+## Friends, chat, invites & voice
+- **Friends:** add by username (the other player accepts), remove anytime. Friends show live status: online, at a table, playing, or offline.
+- **Invite:** from the 👥 Teman panel, invite an online friend to your current table; they get a Gabung / Nanti popup.
+- **Direct chat:** private messages between friends, saved in the database, delivered live with unread badges.
+- **Table reactions:** type any message (up to 80 chars) or pick a quick phrase.
+- **Voice chat:** tap 🎤 at the table to join, tap again to mute. Peer-to-peer WebRTC; the server only relays signaling.
+  STUN is used by default. Some mobile networks need a TURN relay. Set `ICE_SERVERS` to a JSON array of ICE servers
+  (e.g. from a TURN provider) to enable it.
+- **Arrange cards:** press and slide a card sideways to move it; tap to select; ⇅ auto-sorts by rank / suit.
+
 ## Project layout
 - `server.js`: authoritative game server (Express + Socket.IO). Hands are never sent to other players.
 - `auth.js`, `store.js`: account API (signup/login/history) and database layer.

@@ -111,11 +111,65 @@ function client(name) {
   anon.close();
 
   const a = client('Ana'), b = client('Beni');
+  const got = { a: [], b: [] };
+  for (const ev of ['dm', 'invite', 'presence', 'friends:request', 'voice:signal', 'voice:joined']) {
+    a.on(ev, (d) => got.a.push([ev, d])); b.on(ev, (d) => got.b.push([ev, d]));
+  }
   await call(a, 'hello', { auth: tokA });
   await call(b, 'hello', { auth: tokB });
+
+  // ----- friends -----
+  const idA = la.data.user.id, idB = sb.data.user.id;
+  assert.equal((await api('/friends', { method: 'POST', token: tokA, body: { username: 'nobody' } })).status, 404, 'unknown username');
+  assert.equal((await api('/friends', { method: 'POST', token: tokA, body: { username: 'ana' } })).status, 400, 'cannot add self');
+  assert.equal((await api('/messages/' + idB, { method: 'POST', token: tokA, body: { body: 'hai' } })).status, 403, 'no DM before friendship');
+  assert.equal((await api('/friends', { method: 'POST', token: tokA, body: { username: '@Beni' } })).data.status, 'pending');
+  await sleep(150);
+  assert(got.b.some(([e]) => e === 'friends:request'), 'Beni notified of request');
+  const fb = (await api('/friends', { token: tokB })).data;
+  assert.equal(fb.incoming.length, 1); assert.equal(fb.incoming[0].username, 'ana');
+  assert.equal((await api('/friends/' + idA + '/accept', { method: 'POST', token: tokB })).status, 200);
+  const fa = (await api('/friends', { token: tokA })).data;
+  assert.equal(fa.friends.length, 1); assert.equal(fa.friends[0].username, 'beni');
+  assert.equal(fa.friends[0].presence.online, true, 'Beni shows online');
+
+  // ----- direct messages -----
+  await api('/messages/' + idB, { method: 'POST', token: tokA, body: { body: 'Halo Beni <b>!</b>' } });
+  await sleep(150);
+  const dmB = got.b.find(([e]) => e === 'dm');
+  assert(dmB && dmB[1].body === 'Halo Beni <b>!</b>', 'Beni receives DM live');
+  assert.equal((await api('/friends', { token: tokB })).data.friends[0].unread, 1, 'unread count');
+  const thread = (await api('/messages/' + idA, { token: tokB })).data.messages;
+  assert.equal(thread.length, 1);
+  assert.equal((await api('/friends', { token: tokB })).data.friends[0].unread, 0, 'read after opening');
+
+  // ----- invite to a table -----
   const { room } = await call(a, 'create', { mult: 250 });
   assert(room, 'room created');
-  const j = await call(b, 'join', { code: room });
+  await sleep(500);
+  const presA = got.b.filter(([e, d]) => e === 'presence' && d.userId === idA).pop();
+  assert(presA && presA[1].room === room, 'Beni sees Ana at her table');
+  const inv = await call(a, 'invite', { friendId: idB });
+  assert(inv.ok, JSON.stringify(inv));
+  await sleep(150);
+  const invB = got.b.find(([e]) => e === 'invite');
+  assert(invB && invB[1].room === room && invB[1].from.username === 'ana', 'Beni receives invite');
+  assert((await call(a, 'invite', { friendId: idB })).error, 'invite throttled');
+  const j = await call(b, 'join', { code: invB[1].room });
+
+  // ----- voice signaling relay -----
+  const va = await call(a, 'voice:join');
+  assert.deepEqual(va.peers, [], 'first in voice has no peers');
+  const vb = await call(b, 'voice:join');
+  assert.deepEqual(vb.peers, [va.seat], 'second sees the first');
+  b.emit('voice:signal', { to: va.seat, data: { sdp: { type: 'offer', sdp: 'x' } } });
+  await sleep(150);
+  const sig = got.a.find(([e]) => e === 'voice:signal');
+  assert(sig && sig[1].from === vb.seat && sig[1].data.sdp.type === 'offer', 'offer relayed');
+  assert(a.view.seats[vb.seat].voice, 'voice flag in view');
+  b.emit('voice:mute', { muted: true }); await sleep(100);
+  assert(a.view.seats[vb.seat].muted, 'mute flag in view');
+  a.emit('voice:leave'); b.emit('voice:leave'); await sleep(100);
   assert(!j.error, j.error);
   a.emit('addBot', { seat: 2 }); a.emit('addBot', { seat: 3 });
   await sleep(200);
@@ -199,6 +253,10 @@ function client(name) {
   assert.equal(st.games, 3); assert.equal(st.matches, 1);
   assert.equal(st.points, f.players.find((p) => p.name === 'Beni').score, 'Beni stats points');
   console.log('saved', JSON.stringify(st));
+  // removing a friend ends the friendship both ways
+  await api('/friends/' + idA, { method: 'DELETE', token: tokB });
+  assert.equal((await api('/friends', { token: tokA })).data.friends.length, 0, 'friend removed');
+  assert.equal((await api('/messages/' + idB, { method: 'POST', token: tokA, body: { body: 'hai' } })).status, 403, 'no DM after removal');
 
   a.emit('newSession');
   await sleep(200);

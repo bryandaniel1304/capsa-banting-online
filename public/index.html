@@ -42,7 +42,10 @@
             <input id="codeInput" maxlength="5" placeholder="KODE MEJA" autocapitalize="characters">
             <button id="joinBtn" class="btn green">Gabung</button>
           </div>
-          <button id="myHistBtn" class="btn blue small">📊 Riwayat Saya</button>
+          <div class="me-actions">
+            <button id="myHistBtn" class="btn blue small">📊 Riwayat Saya</button>
+            <button id="friendsBtn" class="btn orange small">👥 Teman <span class="badge hidden"></span></button>
+          </div>
         </div>
         <button id="rulesBtnHome" class="btn ghost small">❓ Aturan Main</button>
       </div>
@@ -68,6 +71,7 @@
       </div>
     </div>
     <div class="topright">
+      <button id="friendsBtnTable" class="pill">👥 Teman <span class="badge hidden"></span></button>
       <button id="shareBtn" class="pill">🔗 Undang</button>
       <button id="histBtn" class="pill">📜 Riwayat</button>
       <button id="soundBtn" class="round-btn" aria-label="Suara">🔊</button>
@@ -99,6 +103,7 @@
       <button id="chatBtn" class="round-btn" aria-label="Chat">💬</button>
     </div>
     <div id="chatMenu" class="chat-menu hidden"></div>
+    <button id="voiceBtn" class="voice-btn off" aria-label="Voice chat"><span class="vi">🎤</span><span class="vl">Voice</span></button>
 
     <div id="result" class="overlay hidden"></div>
     <div id="final" class="overlay hidden"></div>
@@ -108,6 +113,7 @@
       <div class="dialog">
         <div class="dlg-title">Menu</div>
         <button id="leaveBtn" class="btn red">Keluar Meja</button>
+        <button id="voiceOffBtn" class="btn ghost hidden">🎤 Matikan Voice Chat</button>
         <button id="fsBtn" class="btn ghost">⛶ Layar Penuh</button>
         <button id="closeMenu" class="btn ghost">Tutup</button>
       </div>
@@ -116,6 +122,8 @@
 
   <div id="rules" class="overlay hidden"></div>
   <div id="myHist" class="overlay hidden"></div>
+  <div id="friends" class="overlay hidden"></div>
+  <div id="dm" class="overlay hidden"></div>
   <div id="ask" class="overlay hidden"></div>
   <div id="toasts"></div>
   <div id="conn" class="conn hidden">Menghubungkan…</div>

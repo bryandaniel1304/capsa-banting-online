@@ -17,13 +17,37 @@ const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻',
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api', accounts.router());
+app.use('/api', accounts.router({ presenceOf: (id) => presenceOf(id), emitToUser: (id, ev, data) => emitToUser(id, ev, data) }));
 app.get('/rules.js', (_, res) => res.sendFile(path.join(__dirname, 'shared', 'rules.js')));
 app.get('/healthz', (_, res) => res.send('ok'));
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' }, pingInterval: 10000, pingTimeout: 20000 });
 
 const rooms = new Map(); // code -> room
+
+// ---------- presence (friends see who is online / at a table) ----------
+// every logged-in socket joins the socket.io room 'user:<id>'
+const emitToUser = (userId, ev, data) => io.to('user:' + userId).emit(ev, data);
+function presenceOf(userId) {
+  const online = (io.sockets.adapter.rooms.get('user:' + userId) || new Set()).size > 0;
+  const room = rooms.get(tokenRoom.get('u:' + userId));
+  return { online, room: online && room ? room.code : null, state: online && room ? room.state : null, players: room ? room.seats.filter(Boolean).length : 0 };
+}
+const presTimers = new Map();
+function notifyPresence(userId) {
+  if (!userId) return;
+  clearTimeout(presTimers.get(userId));
+  presTimers.set(userId, setTimeout(async () => {
+    presTimers.delete(userId);
+    try {
+      const ids = await store.friendIds(userId);
+      const pr = { userId, ...presenceOf(userId) };
+      ids.forEach((f) => emitToUser(f, 'presence', pr));
+    } catch (e) { console.error('presence', e.message); }
+  }, 300));
+}
+const roomPresence = (room) => room.seats.forEach((p) => p && p.userId && !p.bot && notifyPresence(p.userId));
+const lastInvite = new Map();
 const tokenRoom = new Map(); // player token -> room code
 
 function makeCode() {
@@ -68,7 +92,7 @@ function removePlayer(room, seat) {
   const p = room.seats[seat];
   if (!p) return;
   room.seats[seat] = null;
-  if (!p.bot) tokenRoom.delete(p.token);
+  if (!p.bot) { tokenRoom.delete(p.token); notifyPresence(p.userId); }
   if (room.hostToken === p.token) {
     const h = humans(room)[0];
     room.hostToken = h ? h.token : null;
@@ -103,6 +127,7 @@ function startGame(room) {
   }
 
   room.gameNo++;
+  roomPresence(room);
   room.state = 'playing';
   room.result = null;
   const bonus = {};
@@ -240,6 +265,7 @@ function endGame(room, winner, finalEv, finalCards) {
   room.state = 'result';
   room.seats.forEach((p) => p && (p.ready = !!p.bot));
   io.to(room.code).emit('fx', { type: 'win', seat: winner });
+  roomPresence(room);
   broadcast(room);
 }
 
@@ -324,6 +350,7 @@ function finishSession(room) {
   room.final = settle(room);
   persistFinal(room);
   room.state = 'final';
+  roomPresence(room);
   room.endVote = null;
   io.to(room.code).emit('fx', { type: 'final' });
   broadcast(room);
@@ -364,7 +391,7 @@ function viewFor(room, token) {
     you: me, host: seatOf(room, room.hostToken),
     seats: room.seats.map((p, i) => p && {
       name: p.name, avatar: p.avatar, score: p.score, games: p.games, wins: p.wins,
-      bot: !!p.bot, connected: !!(p.bot || p.connected), ready: !!p.ready,
+      bot: !!p.bot, connected: !!(p.bot || p.connected), ready: !!p.ready, voice: !!p.voice, muted: !!p.muted, userId: p.userId || null,
       count: playing && g.hands[i] ? g.hands[i].length : 0,
       passed: playing && g.passed.includes(i),
       inGame: playing && !!g.hands[i],
@@ -409,16 +436,77 @@ io.on('connection', (socket) => {
   });
 
   function attach(room, p) {
+    if (p.voice && p.socketId !== socket.id) voiceLeave(room, p); // voice connections belong to the old socket
     p.socketId = socket.id; p.connected = true;
     socket.join(room.code);
     broadcast(room);
+    notifyPresence(p.userId);
   }
+
+  // ---------- voice chat (WebRTC mesh; the server only relays signaling) ----------
+  function voiceLeave(room, p) {
+    if (!p || !p.voice) return;
+    p.voice = false; p.muted = false;
+    io.to(room.code).emit('voice:left', { seat: p.seat });
+    broadcast(room);
+  }
+  socket.on('voice:join', (_, cb) => {
+    const room = roomOf();
+    if (!room) return ack(cb, { error: 'Tidak di meja' });
+    const s = seatOf(room, token);
+    const p = room.seats[s];
+    const peers = room.seats.map((x, i) => (x && !x.bot && x.voice && x.socketId && i !== s ? i : -1)).filter((i) => i >= 0);
+    p.voice = true; p.muted = false;
+    socket.to(room.code).emit('voice:joined', { seat: s });
+    broadcast(room);
+    ack(cb, { seat: s, peers });
+  });
+  socket.on('voice:signal', ({ to, data } = {}) => {
+    const room = roomOf();
+    if (!room || !data) return;
+    const from = seatOf(room, token);
+    const target = room.seats[to];
+    if (from < 0 || !target || !target.voice || !target.socketId) return;
+    io.to(target.socketId).emit('voice:signal', { from, data });
+  });
+  socket.on('voice:mute', ({ muted } = {}) => {
+    const room = roomOf();
+    const p = room && room.seats[seatOf(room, token)];
+    if (!p || !p.voice) return;
+    p.muted = !!muted;
+    broadcast(room);
+  });
+  socket.on('voice:leave', () => {
+    const room = roomOf();
+    if (room) voiceLeave(room, room.seats[seatOf(room, token)]);
+  });
+
+  // ---------- invite an online friend to my table ----------
+  socket.on('invite', async ({ friendId } = {}, cb) => {
+    try {
+      if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
+      const room = roomOf();
+      if (!room) return ack(cb, { error: 'Buat atau masuk meja dulu' });
+      const fid = parseInt(friendId, 10);
+      if (!(await store.areFriends(user.id, fid))) return ack(cb, { error: 'Bukan teman' });
+      if (!presenceOf(fid).online) return ack(cb, { error: 'Teman sedang offline' });
+      const k = user.id + ':' + fid;
+      if (Date.now() - (lastInvite.get(k) || 0) < 8000) return ack(cb, { error: 'Tunggu sebentar sebelum mengundang lagi' });
+      lastInvite.set(k, Date.now());
+      emitToUser(fid, 'invite', {
+        from: { id: user.id, name: user.name, username: user.username, avatar: user.avatar },
+        room: room.code, mult: room.mult, players: room.seats.filter(Boolean).length, state: room.state,
+      });
+      ack(cb, { ok: true });
+    } catch (e) { console.error('invite', e.message); ack(cb, { error: 'Gagal mengundang' }); }
+  });
 
   function leave(room) {
     const s = seatOf(room, token);
     if (s < 0) return;
     socket.leave(room.code);
     const p = room.seats[s];
+    voiceLeave(room, p);
     if (room.state === 'playing' && room.game.hands[s]) {
       // a bot takes over the hand so the game can finish
       tokenRoom.delete(token);
@@ -434,9 +522,13 @@ io.on('connection', (socket) => {
 
   // Logged-in players only: the account's session token identifies the player on every device.
   socket.on('hello', async ({ auth } = {}, cb) => {
+    const prevId = user && user.id;
     try { user = await store.userByToken(auth); } catch (e) { console.error('auth', e.message); user = null; }
     token = user ? 'u:' + user.id : null;
+    if (prevId && (!user || user.id !== prevId)) { socket.leave('user:' + prevId); notifyPresence(prevId); }
     if (!user) return ack(cb, { room: null, user: null });
+    socket.join('user:' + user.id);
+    notifyPresence(user.id);
     const room = roomOf();
     const p = room && room.seats[seatOf(room, token)];
     if (p) { p.name = clean(user.name, 14) || p.name; p.avatar = user.avatar || p.avatar; attach(room, p); return ack(cb, { room: room.code, user }); }
@@ -579,19 +671,23 @@ io.on('connection', (socket) => {
     ack(cb, { error: doPass(room, seatOf(room, token)) });
   });
 
+  let lastChat = 0;
   socket.on('chat', ({ text } = {}) => {
     const room = roomOf();
-    if (!room) return;
+    if (!room || Date.now() - lastChat < 800) return; // light anti-spam
+    lastChat = Date.now();
     const s = seatOf(room, token);
-    const t = clean(text, 60);
+    const t = clean(text, 80);
     if (s >= 0 && t) io.to(room.code).emit('chat', { seat: s, text: t });
   });
 
   socket.on('disconnect', () => {
+    if (user) notifyPresence(user.id);
     const room = roomOf();
     if (!room) return;
     const p = room.seats[seatOf(room, token)];
     if (!p || p.socketId !== socket.id) return;
+    voiceLeave(room, p);
     p.connected = false; p.socketId = null;
     broadcast(room);
     if (room.state === 'playing' && room.game.turn === p.seat) {

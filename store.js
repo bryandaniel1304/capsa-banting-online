@@ -61,6 +61,25 @@ const SCHEMA = [
   'create index if not exists game_players_user on game_players(user_id)',
   'create index if not exists match_players_user on match_players(user_id)',
   'create index if not exists games_match on games(match_id)',
+  // friendships: one row per pair, user_id = who sent the request; status 'pending' | 'accepted'
+  `create table if not exists friendships (
+    user_id integer not null references users(id) on delete cascade,
+    friend_id integer not null references users(id) on delete cascade,
+    status text not null default 'pending',
+    created_at timestamptz not null default now(),
+    primary key (user_id, friend_id)
+  )`,
+  'create index if not exists friendships_friend on friendships(friend_id)',
+  `create table if not exists messages (
+    id serial primary key,
+    from_id integer not null references users(id) on delete cascade,
+    to_id integer not null references users(id) on delete cascade,
+    body text not null,
+    created_at timestamptz not null default now(),
+    read_at timestamptz
+  )`,
+  'create index if not exists messages_pair on messages(from_id, to_id, id)',
+  'create index if not exists messages_unread on messages(to_id, read_at)',
 ];
 
 let db = null;
@@ -192,7 +211,60 @@ async function matchDetail(matchId, userId) {
   return { match, players, games };
 }
 
+// ---------- friends ----------
+const pairSql = '(user_id = $1 and friend_id = $2) or (user_id = $2 and friend_id = $1)';
+async function friendRow(a, b) { return one('select * from friendships where ' + pairSql, [a, b]); }
+
+// Send a request, or accept automatically when the other side already asked. Returns the resulting status.
+async function requestFriend(me, other) {
+  const row = await friendRow(me, other);
+  if (!row) { await q("insert into friendships (user_id, friend_id, status) values ($1, $2, 'pending')", [me, other]); return 'pending'; }
+  if (row.status === 'pending' && row.user_id === other) {
+    await q("update friendships set status = 'accepted' where user_id = $1 and friend_id = $2", [other, me]);
+    return 'accepted';
+  }
+  return row.status === 'accepted' ? 'already' : 'pending';
+}
+async function acceptFriend(me, other) {
+  const r = await q("update friendships set status = 'accepted' where user_id = $1 and friend_id = $2 and status = 'pending' returning user_id", [other, me]);
+  return r.length > 0;
+}
+async function removeFriend(me, other) {
+  await q('delete from friendships where ' + pairSql, [me, other]);
+}
+async function areFriends(a, b) {
+  const row = await friendRow(a, b);
+  return !!row && row.status === 'accepted';
+}
+async function friendIds(me) {
+  const rows = await q("select case when user_id = $1 then friend_id else user_id end as id from friendships where (user_id = $1 or friend_id = $1) and status = 'accepted'", [me]);
+  return rows.map((r) => r.id);
+}
+async function listFriends(me) {
+  const rows = await q(`select u.id, u.username, u.name, u.avatar, f.status, (f.user_id = $1) as outgoing
+                        from friendships f join users u on u.id = case when f.user_id = $1 then f.friend_id else f.user_id end
+                        where f.user_id = $1 or f.friend_id = $1 order by lower(u.name)`, [me]);
+  const unread = await q('select from_id, count(*)::int as n from messages where to_id = $1 and read_at is null group by from_id', [me]);
+  const un = Object.fromEntries(unread.map((r) => [r.from_id, r.n]));
+  return rows.map((r) => ({ ...r, unread: un[r.id] || 0 }));
+}
+
+// ---------- direct messages ----------
+async function addMessage(from, to, body) {
+  return one('insert into messages (from_id, to_id, body) values ($1, $2, $3) returning id, from_id, to_id, body, created_at', [from, to, body]);
+}
+async function messages(me, other, beforeId) {
+  const rows = await q(`select id, from_id, to_id, body, created_at from messages
+                        where ((from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)) and ($3::int is null or id < $3)
+                        order by id desc limit 50`, [me, other, beforeId || null]);
+  return rows.reverse();
+}
+async function markRead(me, other) {
+  await q('update messages set read_at = now() where to_id = $1 and from_id = $2 and read_at is null', [me, other]);
+}
+
 module.exports = {
+  requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,
   init, kind: () => db && db.kind,
   findUserByUsername, createUser, updateUser, createSession, userByToken, deleteSession,
   createMatch, recordGame, finishMatch, stats, history, matchDetail,

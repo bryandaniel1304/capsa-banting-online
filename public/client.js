@@ -121,6 +121,7 @@
   function hello() {
     socket.emit('hello', { auth: authToken }, (res) => {
       me.user = (res && res.user) || null;
+      if (me.user) refreshFriends();
       if (!me.user && authToken) { authToken = null; store.set('auth', null); }
       if (res && res.room) return;
       const want = new URLSearchParams(location.search).get('room');
@@ -128,11 +129,18 @@
       else { if (want) $('#codeInput').value = want.toUpperCase(); showHome(); }
     });
   }
-  socket.on('connect', () => { $('#conn').classList.add('hidden'); hello(); });
+  socket.on('connect', () => {
+    $('#conn').classList.add('hidden');
+    if (voice.on) { voiceStop(true); toast('Voice terputus, ketuk 🎤 untuk sambung lagi'); }
+    hello();
+  });
   socket.on('disconnect', () => $('#conn').classList.remove('hidden'));
   socket.on('toast', ({ msg, error }) => toast(msg, error));
   socket.on('kicked', () => { V = null; toast('Kamu dikeluarkan dari meja', true); setRoomUrl(null); showHome(); });
+  let leftCode = null; // ignore late updates from a table we just left
   socket.on('state', (v) => {
+    if (leftCode && v.code === leftCode) return;
+    leftCode = null;
     const prev = V;
     V = v;
     deadline = Date.now() + v.remaining;
@@ -284,6 +292,7 @@
     socket.emit('create', { mult }, (res) => res && res.error && toast(res.error, true));
   };
   function joinRoom(code) {
+    if (String(code).toUpperCase() === leftCode) leftCode = null;
     socket.emit('join', { code }, (res) => {
       if (res && res.error) { toast(res.error, true); setRoomUrl(null); showHome(); }
     });
@@ -318,6 +327,7 @@
 
   function renderSeat(seat) {
     const el = seatEl(seat);
+    const bubbles = [...el.querySelectorAll('.bubble')]; // keep chat bubbles across re-renders
     const p = V.seats[seat];
     const isMe = seat === V.you;
     el.className = 'seat ' + ['me', 'right', 'top', 'left'][rel(seat)];
@@ -339,11 +349,13 @@
     const kick = V.host === V.you && !isMe && !playing ? '<div class="seat-acts"><button data-kick="' + seat + '">Keluarkan</button></div>' : '';
     el.innerHTML =
       '<div class="ava-wrap"><div class="ring"></div><div class="avatar">' + esc(p.avatar) + '</div>' +
+      (p.voice ? '<div class="vbadge' + (p.muted ? ' muted' : '') + '">' + (p.muted ? '🔇' : '🎙️') + '</div>' : '') +
       (p.passed ? '<div class="passhand">✋</div>' : '') +
       '<div class="tags">' + tags.join('') + '</div></div>' +
       '<div class="plate"><div class="nm">' + esc(p.name) + '</div><div class="ch">⭐ ' + pts(p.score) + ' poin' + (p.bonus ? ' <span class="bn">' + p.bonus + '</span>' : '') + '</div></div>' +
       (showCount ? '<div class="count' + (p.count <= 3 ? ' warn' : '') + '">' + p.count + '</div>' : '') +
       (turn && !isMe ? '<div class="tmr">' + Math.ceil((deadline - Date.now()) / 1000) + '</div>' : '') + kick;
+    bubbles.forEach((x) => el.appendChild(x));
   }
 
   $('#table').addEventListener('click', (e) => {
@@ -422,6 +434,7 @@
   }
   function renderHand() {
     const el = $('#hand');
+    if (press && press.moving) { pendingHand = true; return; } // don't rebuild under a dragged card
     if (!V || V.state !== 'playing' || !V.hand.length) { el.innerHTML = ''; return; }
     syncHandOrder();
     const n = handOrder.length;
@@ -431,6 +444,7 @@
     const step = n > 1 ? Math.min(cw * 0.98, (W - cw) / (n - 1)) : 0;
     const total = cw + step * (n - 1);
     const x0 = (W - total) / 2;
+    handLayout = { x0, step };
     el.innerHTML = handOrder.map((c, i) => {
       const cls = (selected.has(c) ? ' sel' : '') + (V.mustInclude === c ? ' must' : '') + (dealAnim ? ' deal' : '');
       return cardHTML(c, cls).replace('class="card', 'style="left:' + (x0 + i * step).toFixed(1) + 'px;z-index:' + i + ';animation-delay:' + (dealAnim ? i * 45 : 0) + 'ms" class="card');
@@ -438,30 +452,57 @@
     if (dealAnim) setTimeout(() => (dealAnim = false), 50);
   }
 
-  // tap or drag across cards to select
-  let dragging = false, dragMode = true, dragSeen = new Set();
-  function cardAt(x, y) { const t = document.elementFromPoint(x, y); return t && t.closest('#hand .card'); }
-  function toggleCard(el, forceMode) {
+  // Hand: tap a card to select it; press and slide it sideways to move it and arrange your own groups.
+  let handLayout = { x0: 0, step: 0 };
+  let press = null, pendingHand = false;
+  function stagePoint(e) {
+    const r = stage.getBoundingClientRect();
+    return stage.classList.contains('rotated') ? { x: e.clientY - r.top, y: r.right - e.clientX } : { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function toggleCard(el) {
     const id = +el.dataset.id;
-    const on = forceMode != null ? forceMode : !selected.has(id);
+    const on = !selected.has(id);
     if (on) selected.add(id); else selected.delete(id);
     el.classList.toggle('sel', on);
     hintIdx = -1;
     renderActions();
-    return on;
+  }
+  function placeCards(skipId) {
+    const els = [...$('#hand').children];
+    handOrder.forEach((c, i) => {
+      const el = els.find((x) => +x.dataset.id === c);
+      if (el && c !== skipId) { el.style.left = (handLayout.x0 + i * handLayout.step).toFixed(1) + 'px'; el.style.zIndex = i; }
+    });
   }
   $('#hand').addEventListener('pointerdown', (e) => {
-    const el = e.target.closest('.card'); if (!el) return;
-    dragging = true; dragSeen = new Set([el.dataset.id]);
-    dragMode = toggleCard(el);
-    sfx.tick();
+    const el = e.target.closest('.card'); if (!el || press) return;
+    e.preventDefault();
+    press = { el, id: +el.dataset.id, x0: stagePoint(e).x, startLeft: parseFloat(el.style.left) || 0, moving: false, pointerId: e.pointerId };
+    try { el.setPointerCapture(e.pointerId); } catch {}
   });
-  window.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const el = cardAt(e.clientX, e.clientY);
-    if (el && !dragSeen.has(el.dataset.id)) { dragSeen.add(el.dataset.id); toggleCard(el, dragMode); }
+  $('#hand').addEventListener('pointermove', (e) => {
+    if (!press || e.pointerId !== press.pointerId) return;
+    const dx = stagePoint(e).x - press.x0;
+    if (!press.moving) {
+      if (Math.abs(dx) < 12) return;
+      press.moving = true;
+      press.el.classList.add('dragging');
+    }
+    const left = press.startLeft + dx;
+    press.el.style.left = left + 'px';
+    const idx = Math.max(0, Math.min(handOrder.length - 1, Math.round((left - handLayout.x0) / (handLayout.step || 1))));
+    const cur = handOrder.indexOf(press.id);
+    if (idx !== cur) { handOrder.splice(cur, 1); handOrder.splice(idx, 0, press.id); placeCards(press.id); }
   });
-  window.addEventListener('pointerup', () => (dragging = false));
+  function endPress(e, cancelled) {
+    if (!press || (e && e.pointerId !== press.pointerId)) return;
+    const p = press; press = null;
+    if (p.moving) { p.el.classList.remove('dragging'); sortMode = 'custom'; pendingHand = false; renderHand(); }
+    else if (!cancelled) { toggleCard(p.el); sfx.tick(); }
+    if (pendingHand) { pendingHand = false; renderHand(); }
+  }
+  $('#hand').addEventListener('pointerup', (e) => endPress(e));
+  $('#hand').addEventListener('pointercancel', (e) => endPress(e, true));
 
   function myTurn() { return V && V.state === 'playing' && V.turn === V.you; }
   // after 2♠ the same player leads freely, so there is nothing to beat
@@ -542,6 +583,7 @@
   let lastSec = -1;
   function tick() {
     requestAnimationFrame(tick);
+    if (voice.on && V) updateSpeaking();
     if (!V || V.state !== 'playing') return;
     const left = Math.max(0, deadline - Date.now());
     const p = left / V.turnMs;
@@ -753,9 +795,18 @@
   $('#myHist').addEventListener('click', (e) => { if (e.target.classList.contains('x') || e.target.id === 'myHist') $('#myHist').classList.add('hidden'); });
 
   // ---------- chat ----------
-  $('#chatMenu').innerHTML = CHATS.map((t) => '<button>' + t + '</button>').join('');
-  $('#chatBtn').onclick = () => $('#chatMenu').classList.toggle('hidden');
-  $('#chatMenu').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; socket.emit('chat', { text: b.textContent }); $('#chatMenu').classList.add('hidden'); };
+  $('#chatMenu').innerHTML = '<form class="chat-input" onsubmit="return false"><input id="chatText" maxlength="80" placeholder="Ketik pesan…" autocomplete="off" enterkeyhint="send">' +
+    '<button id="chatSend" type="submit" class="btn green small">Kirim</button></form><div class="chat-presets">' + CHATS.map((t) => '<button type="button" class="preset">' + t + '</button>').join('') + '</div>';
+  const sendReaction = (text) => {
+    text = String(text || '').trim();
+    if (!text) return;
+    socket.emit('chat', { text });
+    $('#chatText').value = '';
+    $('#chatMenu').classList.add('hidden');
+  };
+  $('#chatBtn').onclick = () => { $('#chatMenu').classList.toggle('hidden'); if (!$('#chatMenu').classList.contains('hidden')) setTimeout(() => $('#chatText').focus(), 50); };
+  $('#chatSend').onclick = () => sendReaction($('#chatText').value);
+  $('#chatMenu').addEventListener('click', (e) => { const b = e.target.closest('.preset'); if (b) sendReaction(b.textContent); });
   function bubble(seat, text, cls) {
     const el = seatEl(seat); if (!el) return;
     const b = document.createElement('div'); b.className = 'bubble' + (cls ? ' ' + cls : ''); b.textContent = text;
@@ -773,6 +824,8 @@
   }
   const showLink = (url) => ask({ title: 'Link Meja', text: 'Salin link ini dan kirim ke teman', input: url, numeric: false, ok: 'Tutup', cancel: 'Batal' });
   function leave() {
+    leftCode = V ? V.code : null;
+    voiceStop();
     socket.emit('leave', null, () => {});
     V = null; setRoomUrl(null);
     ['#menu', '#result', '#final', '#history', '#vote'].forEach((s) => $(s).classList.add('hidden'));
@@ -829,6 +882,298 @@
   const openRules = () => $('#rules').classList.remove('hidden');
   $('#rulesBtn').onclick = openRules; $('#rulesBtnHome').onclick = openRules;
   $('#rules').addEventListener('click', (e) => { if (e.target.id === 'rulesClose' || e.target.id === 'rules') $('#rules').classList.add('hidden'); });
+
+  // ---------- voice chat (WebRTC mesh between the players at the table) ----------
+  const voice = { on: false, muted: false, stream: null, peers: new Map(), ice: null, ctx: null, meters: new Map() };
+  const nameOf = (seat) => (V && V.seats[seat] ? V.seats[seat].name : 'pemain');
+  async function iceServers() {
+    if (!voice.ice) { try { voice.ice = (await api('/ice')).iceServers; } catch { voice.ice = [{ urls: 'stun:stun.l.google.com:19302' }]; } }
+    return voice.ice;
+  }
+  function renderVoiceBtn() {
+    const b = $('#voiceBtn');
+    b.className = 'voice-btn ' + (!voice.on ? 'off' : voice.muted ? 'muted' : 'on');
+    b.querySelector('.vi').textContent = !voice.on ? '🎤' : voice.muted ? '🔇' : '🎙️';
+    b.querySelector('.vl').textContent = !voice.on ? 'Voice' : voice.muted ? 'Mute' : 'Aktif';
+    $('#voiceOffBtn').classList.toggle('hidden', !voice.on);
+  }
+  async function voiceJoin() {
+    if (!V) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.RTCPeerConnection) return toast('Browser ini tidak mendukung voice chat', true);
+    try {
+      voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    } catch { return toast('Izin mikrofon ditolak. Izinkan mikrofon di pengaturan browser.', true); }
+    await iceServers();
+    try { voice.ctx = voice.ctx || new (window.AudioContext || window.webkitAudioContext)(); voice.ctx.resume(); } catch {}
+    voice.on = true; voice.muted = false;
+    meter('me', voice.stream);
+    renderVoiceBtn();
+    socket.emit('voice:join', null, async (res) => {
+      if (!res || res.error) { toast(res ? res.error : 'Voice gagal', true); voiceStop(); return; }
+      for (const seat of res.peers) { try { await callPeer(seat); } catch (e) { console.warn('voice call', e); } }
+      toast('🎙️ Voice chat aktif' + (res.peers.length ? '' : ', menunggu pemain lain menyalakan voice'));
+    });
+  }
+  function voiceStop(silent) {
+    if (!voice.on) return;
+    for (const seat of [...voice.peers.keys()]) closePeer(seat);
+    if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
+    voice.stream = null; voice.on = false; voice.muted = false;
+    voice.meters.clear();
+    if (!silent) socket.emit('voice:leave');
+    renderVoiceBtn();
+  }
+  function setMuted(m) {
+    voice.muted = m;
+    if (voice.stream) voice.stream.getAudioTracks().forEach((t) => (t.enabled = !m));
+    socket.emit('voice:mute', { muted: m });
+    renderVoiceBtn();
+  }
+  function closePeer(seat) {
+    const pc = voice.peers.get(seat);
+    if (pc) { try { pc.close(); } catch {} voice.peers.delete(seat); }
+    const a = document.getElementById('va' + seat);
+    if (a) a.remove();
+    voice.meters.delete(seat);
+  }
+  function makePeer(seat) {
+    closePeer(seat);
+    const pc = new RTCPeerConnection({ iceServers: voice.ice });
+    pc.pending = [];
+    voice.stream.getTracks().forEach((t) => pc.addTrack(t, voice.stream));
+    pc.onicecandidate = (e) => e.candidate && socket.emit('voice:signal', { to: seat, data: { candidate: e.candidate } });
+    pc.ontrack = (e) => {
+      let a = document.getElementById('va' + seat);
+      if (!a) { a = document.createElement('audio'); a.id = 'va' + seat; a.autoplay = true; a.setAttribute('playsinline', ''); document.body.appendChild(a); }
+      a.srcObject = e.streams[0];
+      a.play().catch(() => toast('Ketuk layar untuk mendengar voice', true));
+      meter(seat, e.streams[0]);
+    };
+    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') toast('Voice ke ' + nameOf(seat) + ' gagal tersambung (jaringan)', true); };
+    voice.peers.set(seat, pc);
+    return pc;
+  }
+  async function flushCandidates(pc) { for (const c of pc.pending.splice(0)) await pc.addIceCandidate(c).catch(() => {}); }
+  async function callPeer(seat) {
+    const pc = makePeer(seat);
+    await pc.setLocalDescription(await pc.createOffer());
+    socket.emit('voice:signal', { to: seat, data: { sdp: pc.localDescription } });
+  }
+  socket.on('voice:signal', async ({ from, data }) => {
+    if (!voice.on) return;
+    try {
+      if (data.sdp && data.sdp.type === 'offer') {
+        const pc = makePeer(from);
+        await pc.setRemoteDescription(data.sdp);
+        await flushCandidates(pc);
+        await pc.setLocalDescription(await pc.createAnswer());
+        socket.emit('voice:signal', { to: from, data: { sdp: pc.localDescription } });
+      } else if (data.sdp) {
+        const pc = voice.peers.get(from);
+        if (pc) { await pc.setRemoteDescription(data.sdp); await flushCandidates(pc); }
+      } else if (data.candidate) {
+        const pc = voice.peers.get(from);
+        if (!pc) return;
+        if (pc.remoteDescription) await pc.addIceCandidate(data.candidate).catch(() => {});
+        else pc.pending.push(data.candidate);
+      }
+    } catch (e) { console.warn('voice signal', e); }
+  });
+  socket.on('voice:joined', ({ seat }) => { if (voice.on) closePeer(seat); }); // they will call us
+  socket.on('voice:left', ({ seat }) => closePeer(seat));
+  // audio level meters for the "speaking" glow
+  function meter(key, stream) {
+    if (!voice.ctx) return;
+    try {
+      const src = voice.ctx.createMediaStreamSource(stream);
+      const an = voice.ctx.createAnalyser();
+      an.fftSize = 512;
+      src.connect(an);
+      voice.meters.set(key, { an, buf: new Uint8Array(an.fftSize) });
+    } catch {}
+  }
+  function level(m) {
+    m.an.getByteTimeDomainData(m.buf);
+    let sum = 0;
+    for (const v of m.buf) sum += (v - 128) * (v - 128);
+    return Math.sqrt(sum / m.buf.length);
+  }
+  function updateSpeaking() {
+    for (let s = 0; s < 4; s++) {
+      const el = seatEl(s);
+      const wrap = el && el.querySelector('.ava-wrap');
+      if (!wrap) continue;
+      const m = voice.meters.get(s === V.you ? 'me' : s);
+      const talking = !!m && !(s === V.you && voice.muted) && level(m) > 6;
+      wrap.classList.toggle('speaking', talking);
+    }
+  }
+  $('#voiceBtn').onclick = () => { if (!voice.on) voiceJoin(); else setMuted(!voice.muted); };
+  $('#voiceOffBtn').onclick = () => { voiceStop(); $('#menu').classList.add('hidden'); };
+
+  // ---------- friends, presence and invites ----------
+  let F = { friends: [], incoming: [], outgoing: [] };
+  async function refreshFriends() {
+    if (!me.user) return;
+    try { F = await api('/friends'); } catch { return; }
+    renderFriendBadges();
+    if (!$('#friends').classList.contains('hidden')) renderFriends();
+    if (dmWith) renderDmHeader();
+  }
+  function renderFriendBadges() {
+    const n = F.incoming.length + F.friends.reduce((a, f) => a + (f.unread || 0), 0);
+    document.querySelectorAll('#friendsBtn .badge, #friendsBtnTable .badge').forEach((b) => { b.textContent = n; b.classList.toggle('hidden', !n); });
+  }
+  function statusText(pr) {
+    if (!pr || !pr.online) return '<span class="st-off">⚫ Offline</span>';
+    if (pr.room && pr.state === 'playing') return '<span class="st-play">🟡 Sedang main · meja ' + esc(pr.room) + '</span>';
+    if (pr.room) return '<span class="st-on">🟢 Online · di meja ' + esc(pr.room) + ' (' + pr.players + '/4)</span>';
+    return '<span class="st-on">🟢 Online</span>';
+  }
+  function friendRow(f, actions) {
+    return '<div class="frow"><div class="avatar fav">' + esc(f.avatar) + '</div><div class="finfo"><div class="fname">' + esc(f.name) + ' <small>@' + esc(f.username) + '</small></div>' +
+      (f.presence ? '<div class="fstatus">' + statusText(f.presence) + '</div>' : '') + '</div><div class="facts">' + actions + '</div></div>';
+  }
+  function renderFriends() {
+    const inRoom = !!(V && V.code);
+    const body =
+      '<form class="add-friend" onsubmit="return false"><input id="addFriendInput" placeholder="Username teman" autocapitalize="off" spellcheck="false" maxlength="21">' +
+      '<button id="addFriendBtn" type="submit" class="btn green small">＋ Tambah</button></form>' +
+      (F.incoming.length ? '<h4>Permintaan Pertemanan</h4>' + F.incoming.map((f) => friendRow(f,
+        '<button class="btn green small" data-accept="' + f.id + '">Terima</button><button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="decline">Tolak</button>')).join('') : '') +
+      '<h4>Teman (' + F.friends.length + ')</h4>' +
+      (F.friends.length ? F.friends.map((f) => {
+        const canInvite = inRoom && f.presence.online && f.presence.room !== V.code;
+        return friendRow(f,
+          '<button class="btn blue small" data-chat="' + f.id + '">💬' + (f.unread ? ' <span class="badge">' + f.unread + '</span>' : '') + '</button>' +
+          '<button class="btn green small" data-invite="' + f.id + '"' + (canInvite ? '' : ' disabled') + ' title="' + (inRoom ? 'Undang ke meja ' + V.code : 'Masuk meja dulu untuk mengundang') + '">✉️ Undang</button>' +
+          '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="remove" aria-label="Hapus teman">✕</button>');
+      }).join('') : '<p class="muted">Belum ada teman. Tambahkan dengan username di atas.</p>') +
+      (inRoom ? '' : '<p class="muted">Tips: buat atau masuk meja dulu, lalu undang teman yang online.</p>') +
+      (F.outgoing.length ? '<h4>Menunggu Konfirmasi</h4>' + F.outgoing.map((f) => friendRow(f, '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="cancel">Batalkan</button>')).join('') : '');
+    const el = $('#friends');
+    const keep = el.querySelector('#addFriendInput') ? el.querySelector('#addFriendInput').value : '';
+    el.innerHTML = panel('👥 Teman', body);
+    $('#addFriendInput').value = keep;
+  }
+  function openFriends() {
+    if (needLogin()) return;
+    renderFriends();
+    $('#friends').classList.remove('hidden');
+    refreshFriends();
+  }
+  $('#friendsBtn').onclick = openFriends;
+  $('#friendsBtnTable').onclick = openFriends;
+  $('#friends').addEventListener('click', async (e) => {
+    if (e.target.classList.contains('x') || e.target.id === 'friends') return $('#friends').classList.add('hidden');
+    const b = e.target.closest('button'); if (!b) return;
+    try {
+      if (b.id === 'addFriendBtn') {
+        const username = $('#addFriendInput').value.trim();
+        if (!username) return toast('Ketik username teman', true);
+        const r = await api('/friends', { method: 'POST', body: { username } });
+        $('#addFriendInput').value = '';
+        toast(r.message);
+      } else if (b.dataset.accept) {
+        await api('/friends/' + b.dataset.accept + '/accept', { method: 'POST' });
+        toast('Pertemanan diterima');
+      } else if (b.dataset.remove) {
+        const f = [...F.friends, ...F.incoming, ...F.outgoing].find((x) => x.id === +b.dataset.remove);
+        if (b.dataset.kind === 'remove' && !(await ask({ title: 'Hapus teman?', text: 'Hapus ' + (f ? f.name : '') + ' dari daftar teman?', ok: 'Hapus' }))) return;
+        await api('/friends/' + b.dataset.remove, { method: 'DELETE' });
+      } else if (b.dataset.chat) {
+        openDm(+b.dataset.chat);
+      } else if (b.dataset.invite) {
+        socket.emit('invite', { friendId: +b.dataset.invite }, (r) => toast(r && r.error ? r.error : 'Undangan terkirim ✉️', !!(r && r.error)));
+      }
+      refreshFriends();
+    } catch (err) { toast(err.message, true); }
+  });
+  socket.on('friends:update', refreshFriends);
+  socket.on('friends:request', ({ from }) => { toast('📩 ' + from.name + ' (@' + from.username + ') ingin berteman'); sfx.turn(); });
+  socket.on('presence', (pr) => {
+    const f = F.friends.find((x) => x.id === pr.userId);
+    if (!f) return;
+    const wasOnline = f.presence && f.presence.online;
+    f.presence = pr;
+    if (pr.online && !wasOnline) toast('🟢 ' + f.name + ' sekarang online');
+    if (!$('#friends').classList.contains('hidden')) renderFriends();
+    if (dmWith === f.id) renderDmHeader();
+  });
+  socket.on('invite', async (inv) => {
+    sfx.turn();
+    const playing = V && V.state === 'playing';
+    const ok = await ask({
+      title: '✉️ Undangan Main',
+      text: inv.from.name + ' mengundangmu ke meja ' + inv.room + ' (x' + num(inv.mult) + ', ' + inv.players + '/4 pemain).' + (playing ? ' Kamu sedang main, kartumu akan dimainkan bot jika pindah.' : ''),
+      ok: 'Gabung', cancel: 'Nanti',
+    });
+    if (!ok) return;
+    if (V && V.code === inv.room) return;
+    voiceStop();
+    joinRoom(inv.room);
+  });
+
+  // ---------- direct messages between friends ----------
+  let dmWith = null, dmMsgs = [];
+  const fmtTime = (t) => new Date(t).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const fmtDay = (t) => new Date(t).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+  function renderDmHeader() {
+    const f = F.friends.find((x) => x.id === dmWith);
+    const h = $('#dm .dm-head');
+    if (h && f) h.innerHTML = '<button class="dm-back" aria-label="Kembali">‹</button><div class="avatar fav">' + esc(f.avatar) + '</div><div><div class="fname">' + esc(f.name) + '</div><div class="fstatus">' + statusText(f.presence) + '</div></div>';
+  }
+  function renderDmList() {
+    const list = $('#dmList'); if (!list) return;
+    let lastDay = '';
+    list.innerHTML = dmMsgs.length ? dmMsgs.map((m) => {
+      const day = fmtDay(m.created_at);
+      const sep = day !== lastDay ? '<div class="dm-day">' + day + '</div>' : '';
+      lastDay = day;
+      return sep + '<div class="dm-msg ' + (m.from_id === me.user.id ? 'mine' : 'theirs') + '"><span>' + esc(m.body) + '</span><time>' + fmtTime(m.created_at) + '</time></div>';
+    }).join('') : '<p class="muted center">Belum ada pesan. Sapa temanmu! 👋</p>';
+    list.scrollTop = list.scrollHeight;
+  }
+  async function openDm(friendId) {
+    const f = F.friends.find((x) => x.id === friendId);
+    if (!f) return;
+    dmWith = friendId; dmMsgs = [];
+    const el = $('#dm');
+    el.innerHTML = '<div class="rules-box dm-box"><div class="dm-head"></div><div id="dmList" class="dm-list"><p class="muted center">Memuat…</p></div>' +
+      '<form class="dm-form" onsubmit="return false"><input id="dmText" maxlength="500" placeholder="Tulis pesan…" autocomplete="off" enterkeyhint="send"><button id="dmSend" type="submit" class="btn green small">Kirim</button></form></div>';
+    el.classList.remove('hidden');
+    renderDmHeader();
+    try { dmMsgs = (await api('/messages/' + friendId)).messages; } catch (e) { toast(e.message, true); }
+    f.unread = 0; renderFriendBadges();
+    renderDmList();
+    $('#dmText').focus();
+  }
+  function closeDm() { dmWith = null; $('#dm').classList.add('hidden'); $('#dm').innerHTML = ''; if (!$('#friends').classList.contains('hidden')) renderFriends(); }
+  $('#dm').addEventListener('click', async (e) => {
+    if (e.target.id === 'dm' || e.target.closest('.dm-back')) return closeDm();
+    if (e.target.id === 'dmSend') {
+      const input = $('#dmText');
+      const body = input.value.trim();
+      if (!body || !dmWith) return;
+      input.value = '';
+      try { await api('/messages/' + dmWith, { method: 'POST', body: { body } }); }
+      catch (err) { toast(err.message, true); input.value = body; }
+    }
+  });
+  socket.on('dm', (m) => {
+    const other = m.from_id === me.user.id ? m.to_id : m.from_id;
+    if (dmWith === other) {
+      if (!dmMsgs.some((x) => x.id === m.id)) { dmMsgs.push(m); renderDmList(); }
+      if (m.from_id !== me.user.id) api('/messages/' + other + '/read', { method: 'POST' }).catch(() => {});
+      return;
+    }
+    if (m.from_id !== me.user.id) {
+      const f = F.friends.find((x) => x.id === other);
+      if (f) { f.unread = (f.unread || 0) + 1; renderFriendBadges(); if (!$('#friends').classList.contains('hidden')) renderFriends(); }
+      toast('💬 ' + m.from.name + ': ' + m.body.slice(0, 60));
+      sfx.tick();
+    }
+  });
 
   layout();
   showHome();
