@@ -36,6 +36,8 @@
   // ---------- layout: always landscape ----------
   // Phones held upright get the table rotated; a tall desktop window gets a centered landscape table instead.
   const touch = window.matchMedia('(pointer: coarse)').matches;
+  let typing = false; // a phone keyboard is open (see type sheet below)
+  let lastW = 0;
   // Shrink text that doesn't fit its box (tier cards etc.) so nothing is ever cut off.
   function fitText(root = document) {
     root.querySelectorAll('.fit').forEach((el) => {
@@ -48,6 +50,9 @@
   }
   function layout() {
     const w = window.innerWidth, h = window.innerHeight;
+    // the on-screen keyboard shrinks the viewport on some phones: don't rescale the whole game for it
+    if (typing && w === lastW) return;
+    lastW = w;
     const portrait = h > w;
     const rotate = portrait && touch;
     let W = rotate ? h : w, H = rotate ? w : h;
@@ -61,7 +66,26 @@
     stage.style.setProperty('--u', u.toFixed(3) + 'px');
     if (V) renderHand();
     requestAnimationFrame(() => fitText());
+    showRotateTip(rotate);
   }
+
+  // Phones held upright see the game rotated, but the system keyboard follows the real orientation,
+  // so suggest turning the phone (and lock landscape automatically where the browser allows it).
+  let rotateTipClosed = false;
+  function showRotateTip(rotated) {
+    const tip = document.getElementById('rotateTip');
+    if (tip) tip.classList.toggle('hidden', !rotated || rotateTipClosed);
+  }
+  document.getElementById('rotateTipX').onclick = () => { rotateTipClosed = true; showRotateTip(false); };
+  let triedLock = false;
+  function lockLandscape() {
+    if (triedLock || !touch) return;
+    triedLock = true;
+    const d = document.documentElement;
+    if (!d.requestFullscreen || !screen.orientation || !screen.orientation.lock) return; // e.g. iPhone Safari
+    d.requestFullscreen({ navigationUI: 'hide' }).then(() => screen.orientation.lock('landscape')).catch(() => {});
+  }
+  window.addEventListener('pointerup', lockLandscape, { once: true, capture: true });
   window.addEventListener('resize', layout);
   if (window.ResizeObserver) new ResizeObserver(() => layout()).observe(document.documentElement);
   window.addEventListener('orientationchange', () => setTimeout(layout, 200));
@@ -845,7 +869,7 @@
     $('#chatText').value = '';
     $('#chatMenu').classList.add('hidden');
   };
-  $('#chatBtn').onclick = () => { $('#chatMenu').classList.toggle('hidden'); if (!$('#chatMenu').classList.contains('hidden')) setTimeout(() => $('#chatText').focus(), 50); };
+  $('#chatBtn').onclick = () => { $('#chatMenu').classList.toggle('hidden'); if (!touch && !$('#chatMenu').classList.contains('hidden')) setTimeout(() => $('#chatText').focus(), 50); };
   $('#chatSend').onclick = () => sendReaction($('#chatText').value);
   $('#chatMenu').addEventListener('click', (e) => { const b = e.target.closest('.preset'); if (b) sendReaction(b.textContent); });
   function bubble(seat, text, cls) {
@@ -1187,7 +1211,7 @@
     try { dmMsgs = (await api('/messages/' + friendId)).messages; } catch (e) { toast(e.message, true); }
     f.unread = 0; renderFriendBadges();
     renderDmList();
-    $('#dmText').focus();
+    if (!touch) $('#dmText').focus();
   }
   function closeDm() { dmWith = null; $('#dm').classList.add('hidden'); $('#dm').innerHTML = ''; if (!$('#friends').classList.contains('hidden')) renderFriends(); }
   $('#dm').addEventListener('click', async (e) => {
@@ -1214,6 +1238,64 @@
       toast('💬 ' + m.from.name + ': ' + m.body.slice(0, 60));
       sfx.tick();
     }
+  });
+
+  // ---------- phone typing bar ----------
+  // On phones, typing happens in a bar pinned to the top of the screen. It sits outside the rotated game,
+  // so it matches the real device orientation (and the keyboard), and it always stays above the keyboard.
+  const typeSheet = document.getElementById('typeSheet');
+  let tsTarget = null;
+  const SUBMIT_FOR = { codeInput: '#joinBtn', askInput: '#askOk' };
+  function submitFor(t) {
+    const fromForm = t.form && t.form.querySelector('[type=submit]');
+    return fromForm || (SUBMIT_FOR[t.id] ? $(SUBMIT_FOR[t.id]) : null);
+  }
+  function nextField(t) {
+    if (!t.form) return null;
+    const fields = [...t.form.querySelectorAll('input')].filter((x) => x.offsetParent !== null && !x.readOnly);
+    const after = fields.slice(fields.indexOf(t) + 1);
+    return after.find((x) => !x.value) || null;
+  }
+  function closeTypeSheet(submit) {
+    const t = tsTarget;
+    if (!t) return;
+    const i = $('#tsInput');
+    t.value = i.value;
+    tsTarget = null; typing = false;
+    typeSheet.classList.add('hidden');
+    typeSheet.innerHTML = '';
+    setTimeout(layout, 300);
+    if (!submit) return;
+    const next = nextField(t);
+    if (next) next.focus(); // e.g. username -> password, opens the bar again
+    else { const b = submitFor(t); if (b) b.click(); }
+  }
+  function openTypeSheet(t) {
+    tsTarget = t; typing = true;
+    const rotated = stage.classList.contains('rotated');
+    typeSheet.innerHTML =
+      (rotated ? '<div class="ts-tip">📱↻ Putar HP ke landscape supaya keyboard ikut landscape (iPhone: matikan Kunci Rotasi).</div>' : '') +
+      '<div class="ts-label">' + esc(t.placeholder || 'Ketik') + '</div>' +
+      '<form class="ts-row" onsubmit="return false"><input id="tsInput"><button type="submit" id="tsOk">OK</button><button type="button" id="tsCancel" aria-label="Tutup">✕</button></form>';
+    const i = $('#tsInput');
+    i.type = t.type || 'text';
+    for (const k of ['autocomplete', 'inputMode', 'autocapitalize', 'enterKeyHint', 'name']) { try { if (t[k]) i[k] = t[k]; } catch {} }
+    i.spellcheck = t.spellcheck;
+    if (t.maxLength > 0) i.maxLength = t.maxLength;
+    i.value = t.value;
+    typeSheet.classList.remove('hidden');
+    i.focus({ preventScroll: true }); // still inside the tap, so the keyboard opens
+    t.blur();
+    i.oninput = () => { t.value = i.value; };
+    for (const b of typeSheet.querySelectorAll('button')) b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep focus
+    $('#tsOk').onclick = () => closeTypeSheet(true);
+    $('#tsCancel').onclick = () => closeTypeSheet(false);
+    i.addEventListener('blur', () => setTimeout(() => { if (tsTarget === t) closeTypeSheet(false); }, 200));
+  }
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (!touch || tsTarget || !(t instanceof HTMLInputElement) || !stage.contains(t) || t.readOnly) return;
+    openTypeSheet(t);
   });
 
   layout();

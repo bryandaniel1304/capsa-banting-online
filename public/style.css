@@ -436,3 +436,19 @@ table.hist td.det { text-align: left; white-space: normal; font-size: calc(var(-
 
 .conn { max-width: 80%; text-align: center; line-height: 1.35; padding: calc(var(--u)*1) calc(var(--u)*4); border-radius: calc(var(--u)*3); background: rgba(200,50,40,.95); box-shadow: 0 4px 14px #0007; }
 .conn .pill { margin-left: calc(var(--u)*1.5); background: #fff; color: #b52828; box-shadow: none; }
+
+/* phone typing bar (outside the rotated stage) */
+.type-sheet { position: fixed; left: 0; right: 0; top: 0; z-index: 1000; padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));
+  background: rgba(20,10,35,.97); box-shadow: 0 6px 20px rgba(0,0,0,.5); font-family: 'Baloo 2', system-ui, sans-serif; color: #fff; }
+.type-sheet.hidden { display: none; }
+.ts-tip { font-size: 13px; line-height: 1.3; color: #ffd54a; margin-bottom: 6px; }
+.ts-label { font-size: 13px; opacity: .8; margin-bottom: 4px; }
+.ts-row { display: flex; gap: 8px; }
+.ts-row input { flex: 1; min-width: 0; font-size: 17px; font-weight: 700; padding: 10px 14px; border-radius: 12px; border: 2px solid #2f9e9b; background: #fff; color: #3b2414; outline: none; }
+.ts-row button { font-size: 16px; font-weight: 800; border-radius: 12px; padding: 0 16px; color: #fff; }
+#tsOk { background: linear-gradient(#a6ee5c, #3fb53b 55%, #2c9632); }
+#tsCancel { background: rgba(255,255,255,.15); }
+.rotate-tip { position: absolute; left: 50%; top: calc(var(--u)*2); transform: translateX(-50%); z-index: 95; display: flex; align-items: center; gap: calc(var(--u)*2);
+  max-width: 70%; background: rgba(20,10,35,.92); color: #fff; font-size: calc(var(--u)*3.2); line-height: 1.3; padding: calc(var(--u)*1.2) calc(var(--u)*3); border-radius: calc(var(--u)*3); box-shadow: 0 4px 14px #0007; }
+.rotate-tip b { color: #ffd54a; }
+.rotate-tip button { background: rgba(255,255,255,.18); color: #fff; border-radius: 50%; width: calc(var(--u)*7); height: calc(var(--u)*7); flex: none; font-size: calc(var(--u)*3.6); }

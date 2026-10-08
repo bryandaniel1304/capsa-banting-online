@@ -127,7 +127,10 @@
   <div id="ask" class="overlay hidden"></div>
   <div id="toasts"></div>
   <div id="conn" class="conn hidden">Menghubungkan…</div>
+  <div id="rotateTip" class="rotate-tip hidden"><span>📱↻ Putar HP ke <b>landscape</b> supaya tampilan &amp; keyboard ikut landscape. iPhone: matikan <b>Kunci Rotasi</b> di Pusat Kontrol.</span><button id="rotateTipX" aria-label="Tutup">✕</button></div>
 </div>
+<!-- outside the (possibly rotated) stage: follows the real device orientation, pinned above the keyboard -->
+<div id="typeSheet" class="type-sheet hidden"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="rules.js"></script>
 <script src="client.js"></script>
