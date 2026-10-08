@@ -23,21 +23,33 @@
     <div class="home-wrap">
       <div class="home-left">
         <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">ONLINE</span></div>
-        <div class="profile">
-          <button id="avatarBtn" class="avatar big" aria-label="Ganti avatar"></button>
-          <input id="nameInput" maxlength="14" placeholder="Nama kamu" autocomplete="nickname">
-        </div>
-        <div id="avatarPicker" class="avatar-picker hidden"></div>
-        <div class="join-row">
-          <input id="codeInput" maxlength="5" placeholder="KODE MEJA" autocapitalize="characters">
-          <button id="joinBtn" class="btn green">Gabung</button>
+        <form id="authBox" class="auth-box" autocomplete="on" onsubmit="return false">
+          <div class="auth-tabs"><button type="button" data-tab="login" class="on">Masuk</button><button type="button" data-tab="signup">Daftar</button></div>
+          <input id="authUser" name="username" placeholder="Username" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="20">
+          <input id="authPass" name="password" type="password" placeholder="Password" autocomplete="current-password" maxlength="100">
+          <input id="authName" class="signup-only" placeholder="Nama tampilan (opsional)" maxlength="14">
+          <button id="authBtn" type="submit" class="btn green">Masuk</button>
+        </form>
+        <div id="meBox" class="me-box hidden">
+          <div class="profile">
+            <button id="avatarBtn" class="avatar big" aria-label="Ganti avatar"></button>
+            <div class="me-id"><div id="meName" class="me-name"></div><div id="meUser" class="me-user"></div></div>
+            <button id="logoutBtn" class="pill dark-pill">Keluar akun</button>
+          </div>
+          <div id="avatarPicker" class="avatar-picker hidden"></div>
+          <div id="meStats" class="me-stats"></div>
+          <div class="join-row">
+            <input id="codeInput" maxlength="5" placeholder="KODE MEJA" autocapitalize="characters">
+            <button id="joinBtn" class="btn green">Gabung</button>
+          </div>
+          <button id="myHistBtn" class="btn blue small">📊 Riwayat Saya</button>
         </div>
         <button id="rulesBtnHome" class="btn ghost small">❓ Aturan Main</button>
       </div>
       <div class="home-right">
-        <div class="tiers-title">Buat Meja Baru</div>
+        <div class="tiers-title">Buat Meja Baru · pilih pengali</div>
         <div id="tiers" class="tiers"></div>
-        <div class="home-note">Chip virtual, tanpa uang sungguhan. Ajak teman dengan kode / link meja.</div>
+        <div class="home-note">Tanpa koin: setiap game dihitung poin (semakin rendah semakin bagus). Nilai = poin × pengali. Ajak teman dengan kode / link meja.</div>
       </div>
     </div>
   </section>
@@ -52,15 +64,16 @@
       <button id="rulesBtn" class="round-btn" aria-label="Aturan">?</button>
       <div class="room-info">
         <div><span class="lbl">MEJA</span> <b id="roomCode">-----</b></div>
-        <div><span class="coin"></span> <b id="stakeLbl">40K</b></div>
+        <div><span class="lbl">PENGALI</span> <b id="stakeLbl">x250</b></div>
       </div>
-      <button id="shareBtn" class="pill">🔗 Undang</button>
     </div>
     <div class="topright">
+      <button id="shareBtn" class="pill">🔗 Undang</button>
+      <button id="histBtn" class="pill">📜 Riwayat</button>
       <button id="soundBtn" class="round-btn" aria-label="Suara">🔊</button>
     </div>
 
-    <div id="pot" class="pot"><span class="pot-lbl">TARUHAN</span><span id="potVal">40K</span></div>
+    <div id="pot" class="pot"><span class="pot-lbl">PENGALI</span><span id="potVal">x250</span></div>
 
     <div id="seat1" class="seat right"></div>
     <div id="seat2" class="seat top"></div>
@@ -88,6 +101,9 @@
     <div id="chatMenu" class="chat-menu hidden"></div>
 
     <div id="result" class="overlay hidden"></div>
+    <div id="final" class="overlay hidden"></div>
+    <div id="history" class="overlay hidden"></div>
+    <div id="vote" class="overlay hidden"></div>
     <div id="menu" class="overlay hidden">
       <div class="dialog">
         <div class="dlg-title">Menu</div>
@@ -99,6 +115,8 @@
   </section>
 
   <div id="rules" class="overlay hidden"></div>
+  <div id="myHist" class="overlay hidden"></div>
+  <div id="ask" class="overlay hidden"></div>
   <div id="toasts"></div>
   <div id="conn" class="conn hidden">Menghubungkan…</div>
 </div>

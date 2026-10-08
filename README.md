@@ -46,8 +46,19 @@ This prints a public `https://*.trycloudflare.com` link. It works while your PC 
 If you refresh or lose connection you go back to the same seat. If your turn runs out (20 s), you auto-pass, or you play your lowest card when leading.
 Tip: on Android Chrome, "Add to Home screen" gives a fullscreen, landscape app.
 
+## Accounts & saved history
+Players sign up / log in with a username + password (hashed with scrypt). Every game is saved to the player's account:
+sessions (table code, multiplier, date), who they played with, points per game, final rank and net amount.
+Open **Riwayat Saya** on the home screen to see stats, friends played with, and per-game details.
+
+Storage:
+- **Local dev:** no setup. An embedded Postgres (PGlite) is stored in `~/.capsa-banting-online/`.
+- **Production (Render):** set `DATABASE_URL` to a Postgres connection string (e.g. Supabase, free). Tables are created automatically on start.
+  Render's free disk is wiped on every restart/deploy, so a real database is required online.
+
 ## Project layout
 - `server.js`: authoritative game server (Express + Socket.IO). Hands are never sent to other players.
+- `auth.js`, `store.js`: account API (signup/login/history) and database layer.
 - `shared/rules.js`: card ranking, combination evaluation, hints and bot logic (shared with the browser).
 - `public/`: the mobile web client (`index.html`, `style.css`, `client.js`).
 - `test/sim.js`: rules unit checks plus a full multiplayer simulation (`npm test`).

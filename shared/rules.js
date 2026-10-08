@@ -14,6 +14,13 @@
   const FIVE = { STRAIGHT: 1, FLUSH: 2, FULL_HOUSE: 3, FOUR: 4, STRAIGHT_FLUSH: 5, ROYAL: 6 };
   const FIVE_NAMES = { 1: 'Urutan', 2: 'Flush', 3: 'Full House', 4: 'Empat Kembar', 5: 'Straight Flush', 6: 'Royal Flush' };
 
+  // Scoring (lower is better)
+  const WIN_POINTS = -10;
+  const WIN_WITH_TWO_POINTS = -20; // game closed with a single 2
+  const DRAGON_POINTS = -70; // dragon win is -70 only (no extra -10)
+  const TWO_LEFT_POINTS = 10; // per 2 still in hand when the game ends
+  const BONUS = { 4: -20, 5: -30, 6: -50 }; // Empat Kembar, Straight Flush, Royal Flush
+
   const rankOf = (c) => c >> 2;
   const suitOf = (c) => c & 3;
   const isRed = (c) => suitOf(c) === 0 || suitOf(c) === 2;
@@ -40,6 +47,8 @@
     const n = cs.length;
     if (new Set(cs).size !== n) return null;
     const ranks = cs.map(rankOf);
+
+    if (n === 13) return isDragon(cs) ? { kind: 'dragon', count: 13, type: 0, key: 0, name: 'Dragon' } : null;
 
     if (n === 1) return { kind: 'single', count: 1, type: 0, key: cs[0], name: 'Tunggal' };
     if (n === 2) {
@@ -96,14 +105,40 @@
     return a.key > b.key;
   }
 
-  // Penalty points for cards left in hand (Poin Penalti)
+  // Dragon: 13 cards, one of every rank 3..2
+  function isDragon(cards) {
+    return cards.length === 13 && new Set(cards.map(rankOf)).size === 13;
+  }
+
+  // Bonus (negative) points for playing a special package
+  function bonusFor(ev) {
+    if (!ev) return 0;
+    if (ev.kind === 'dragon') return DRAGON_POINTS;
+    if (ev.kind === 'five') return BONUS[ev.type] || 0;
+    return 0;
+  }
+
+  // Penalty points for cards left in hand
   function penaltyPerCard(left) {
     if (left <= 0) return 0;
-    if (left <= 8) return 1;
-    if (left <= 12) return 2;
-    return 3;
+    if (left <= 6) return 1;
+    if (left <= 9) return 2;
+    if (left <= 12) return 3;
+    return 4;
   }
   const penaltyPoints = (left) => left * penaltyPerCard(left);
+
+  // Winner's base points: -20 when the final play is a single 2, otherwise -10 (a pair of 2s stays -10).
+  // A dragon win scores only its -70 bonus, so the base is 0.
+  const winPoints = (finalEv, finalCards) => {
+    if (finalEv && finalEv.kind === 'dragon') return 0;
+    return finalEv && finalEv.kind === 'single' && rankOf(finalCards[0]) === RANK_TWO ? WIN_WITH_TWO_POINTS : WIN_POINTS;
+  };
+  // Playing 2♠ as a single (or a pair/triple of 2s that holds 2♠) can't be beaten,
+  // so that player immediately starts a new round.
+  const TWO_SPADE = RANK_TWO * 4 + 3;
+  const freeTurnAfter = (ev, cards) => !!ev && cards.includes(TWO_SPADE) && (ev.kind === 'single' || ev.kind === 'pair' || ev.kind === 'triple');
+  const twosLeft = (hand) => hand.filter((c) => rankOf(c) === RANK_TWO).length;
 
   function combinations(arr, k, start = 0, cur = [], out = []) {
     if (cur.length === k) { out.push(cur.slice()); return out; }
@@ -134,6 +169,7 @@
   // Suggest a play. Returns array of card ids or null (pass).
   // lastEv: combo to beat (null when leading). mustInclude: card id that must be played (first lead).
   function suggest(hand, lastEv, mustInclude) {
+    if (!lastEv && isDragon(hand)) return [...hand].sort((a, b) => a - b);
     let cands = allCombos(hand);
     if (mustInclude != null) cands = cands.filter((c) => c.cards.includes(mustInclude));
     if (lastEv) {
@@ -160,8 +196,8 @@
   }
 
   return {
-    RANKS, SUITS, FIVE, FIVE_NAMES, RANK_TWO,
+    RANKS, SUITS, FIVE, FIVE_NAMES, RANK_TWO, WIN_POINTS, WIN_WITH_TWO_POINTS, DRAGON_POINTS, TWO_LEFT_POINTS, BONUS,
     rankOf, suitOf, isRed, label, newDeck, shuffle,
-    evaluate, beats, penaltyPerCard, penaltyPoints, allCombos, suggest, sortHand,
+    evaluate, beats, isDragon, bonusFor, penaltyPerCard, penaltyPoints, winPoints, twosLeft, TWO_SPADE, freeTurnAfter, allCombos, suggest, sortHand,
   };
 });

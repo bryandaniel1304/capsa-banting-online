@@ -31,15 +31,41 @@ assert.equal(ev('10♠ J♠ Q♠ K♠ A♠').name, 'Royal Flush');
 assert(R.beats(ev('10♠ J♠ Q♠ K♠ A♠'), ev('10♦ J♦ Q♦ K♦ A♦')));
 assert(R.beats(ev('10♦ J♦ Q♦ K♦ A♦'), ev('9♠ 10♠ J♠ Q♠ K♠')), 'royal > straight flush');
 assert(!R.beats(ev('3♦ 4♦ 5♦ 6♦ 7♦'), ev('9♠')), 'count must match');
-assert.deepEqual([1, 8, 9, 12, 13].map(R.penaltyPoints), [1, 8, 18, 24, 39]);
+assert.deepEqual([1, 6, 7, 9, 10, 12, 13].map(R.penaltyPoints), [1, 6, 14, 18, 30, 36, 52]);
+assert.equal(R.winPoints(ev('2♠'), C('2♠')), -20, 'closing with single 2');
+assert.equal(R.winPoints(ev('2♥ 2♠'), C('2♥ 2♠')), -10, 'closing with pair of 2 stays -10');
+assert.equal(R.winPoints(ev('A♠'), C('A♠')), -10);
+assert.equal(R.bonusFor(ev('3♠ J♥ J♣ J♦ J♠')), -20, 'four of a kind');
+assert.equal(R.bonusFor(ev('3♦ 4♦ 5♦ 6♦ 7♦')), -30, 'straight flush');
+assert.equal(R.bonusFor(ev('10♠ J♠ Q♠ K♠ A♠')), -50, 'royal flush');
+assert.equal(R.bonusFor(ev('3♠ 3♥ J♣ J♦ J♠')), 0, 'full house no bonus');
+const dragon = C('3♦ 4♣ 5♥ 6♠ 7♦ 8♣ 9♥ 10♠ J♦ Q♣ K♥ A♠ 2♦');
+assert.equal(R.evaluate(dragon).name, 'Dragon');
+assert.equal(R.bonusFor(R.evaluate(dragon)), -70);
+assert.deepEqual(R.suggest(dragon, null, null).length, 13, 'dragon suggested on lead');
+assert(!R.evaluate(C('3♦ 4♣ 5♥ 6♠ 7♦ 8♣ 9♥ 10♠ J♦ Q♣ K♥ A♠ A♦')), 'not a dragon');
+assert.equal(R.winPoints(R.evaluate(dragon), dragon) + R.bonusFor(R.evaluate(dragon)), -70, 'dragon win is -70 only');
+assert.equal(R.twosLeft(C('2♦ 2♠ 5♥ 9♣')), 2);
+const free = (x) => R.freeTurnAfter(ev(x), C(x));
+assert(free('2♠') && free('2♦ 2♠') && free('2♦ 2♣ 2♠'), '2♠ plays give a free turn');
+assert(!free('2♥') && !free('2♦ 2♥') && !free('2♠ 2♦ 2♣ 2♥ 3♦'), 'other plays do not');
 console.log('rules ok');
 
 // ----- simulation -----
 const PORT = 3999;
-const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT }, stdio: ['ignore', 'pipe', 'inherit'] });
+const os = require('os');
+const DATA = path.join(os.tmpdir(), 'capsa-test-' + Date.now());
+const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT, PGLITE_DIR: DATA, DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
 const url = 'http://localhost:' + PORT;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const call = (s, ev, data) => new Promise((res) => s.emit(ev, data, res));
+async function api(path, { method = 'GET', body, token } = {}) {
+  const res = await fetch(url + '/api' + path, {
+    method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: res.status, data: await res.json() };
+}
 
 function client(name) {
   const s = io(url, { transports: ['websocket'] });
@@ -49,7 +75,7 @@ function client(name) {
     if (v.state === 'playing' && v.turn === v.you && !s.acting) {
       s.acting = true;
       setTimeout(async () => {
-        const last = v.lastPlay ? R.evaluate(v.lastPlay.cards) : null;
+        const last = v.lastPlay && !v.free ? R.evaluate(v.lastPlay.cards) : null;
         const pick = R.suggest(v.hand, last, v.mustInclude);
         const res = pick ? await call(s, 'play', { cards: pick }) : await call(s, 'pass');
         if (res && res.error) s.errors.push(res.error);
@@ -62,17 +88,51 @@ function client(name) {
 }
 
 (async () => {
-  await sleep(800);
+  for (let i = 0; i < 50; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+
+  // ----- accounts -----
+  const su = await api('/signup', { method: 'POST', body: { username: 'ana', password: 'rahasia1', name: 'Ana', avatar: '🐼' } });
+  assert.equal(su.status, 200, JSON.stringify(su.data));
+  assert.equal((await api('/signup', { method: 'POST', body: { username: 'ANA', password: 'rahasia1' } })).status, 409, 'duplicate username (case-insensitive)');
+  assert.equal((await api('/signup', { method: 'POST', body: { username: 'x', password: 'rahasia1' } })).status, 400, 'short username');
+  assert.equal((await api('/signup', { method: 'POST', body: { username: 'budi2', password: '123' } })).status, 400, 'short password');
+  const sb = await api('/signup', { method: 'POST', body: { username: 'beni', password: 'rahasia2', name: 'Beni', avatar: '🐯' } });
+  assert.equal((await api('/login', { method: 'POST', body: { username: 'ana', password: 'salah' } })).status, 401, 'wrong password');
+  const la = await api('/login', { method: 'POST', body: { username: 'Ana', password: 'rahasia1' } });
+  assert.equal(la.status, 200, 'login');
+  const tokA = la.data.token, tokB = sb.data.token;
+  assert.equal((await api('/me', { token: tokA })).data.user.username, 'ana');
+  assert.equal((await api('/me')).status, 401, 'me requires auth');
+
+  const anon = client('Anon');
+  const ha = await call(anon, 'hello', { auth: 'not-a-token' });
+  assert.equal(ha.user, null, 'bad token rejected');
+  assert.equal((await call(anon, 'create', { mult: 250 })).error, 'Silakan masuk dulu', 'guests cannot create');
+  anon.close();
+
   const a = client('Ana'), b = client('Beni');
-  await call(a, 'hello', { token: 'tokA' });
-  await call(b, 'hello', { token: 'tokB' });
-  const { room } = await call(a, 'create', { name: 'Ana', avatar: '🐼', stake: 40000 });
+  await call(a, 'hello', { auth: tokA });
+  await call(b, 'hello', { auth: tokB });
+  const { room } = await call(a, 'create', { mult: 250 });
   assert(room, 'room created');
-  const j = await call(b, 'join', { code: room, name: 'Beni', avatar: '🐯' });
+  const j = await call(b, 'join', { code: room });
   assert(!j.error, j.error);
   a.emit('addBot', { seat: 2 }); a.emit('addBot', { seat: 3 });
   await sleep(200);
   assert.equal(a.view.seats.filter(Boolean).length, 4);
+  // the previous game's winner must open the next game; table history must stay card plays
+  const firstTurn = {};
+  let twoSpades = 0;
+  a.on('state', (v) => {
+    if (v.state === 'playing' && !(v.gameNo in firstTurn)) firstTurn[v.gameNo] = v.turn;
+    if (v.state === 'playing') for (const h of v.history) assert(Array.isArray(h.cards), 'table history holds cards');
+    // 2♠ (single / pair / triple of 2s with 2♠): the same player plays again immediately
+    if (v.state === 'playing' && v.lastPlay && R.freeTurnAfter(R.evaluate(v.lastPlay.cards), v.lastPlay.cards)) {
+      assert(v.free, 'free turn after 2♠');
+      assert.equal(v.turn, v.lastPlay.seat, '2♠ player plays again');
+      twoSpades++;
+    }
+  });
   a.emit('start');
   const t0 = Date.now();
   let games = 0, lastNo = 0;
@@ -81,20 +141,76 @@ function client(name) {
     const v = a.view;
     if (v.state === 'result' && v.gameNo !== lastNo) {
       lastNo = v.gameNo; games++;
-      const total = v.seats.reduce((s, p) => s + p.chips, 0);
       const w = v.result.rows[0];
-      console.log('game', v.gameNo, 'winner', w.name, '+' + w.delta, 'losers', v.result.rows.slice(1).map((r) => r.left + ' left').join(', '), 'chips total', total);
-      assert.equal(v.result.rows.reduce((s, r) => s + r.delta, 0), 0, 'zero-sum payouts');
+      console.log('game', v.gameNo, v.result.rows.map((r) => r.name + ' ' + r.points + ' [' + r.items.map((i) => i.label + ' ' + i.points).join(', ') + '] total ' + r.total).join(' | '));
+      assert(w.winner && (w.items[0].points === -10 || w.items[0].points === -20), 'winner base points');
+      for (const r of v.result.rows) {
+        if (!r.winner) {
+          assert.equal(r.items[0].points, R.penaltyPoints(r.left), 'loser penalty');
+          const twos = R.twosLeft(r.cards);
+          assert.equal(r.items.filter((i) => /kartu 2$/.test(i.label)).reduce((a, b) => a + b.points, 0), twos * 10, '+10 per 2 left');
+        }
+        assert.equal(r.points, r.items.reduce((a, b) => a + b.points, 0), 'row sum');
+        assert.equal(v.seats[r.seat].score, r.total, 'cumulative score');
+      }
     }
   }
   assert.equal(games, 3, 'played 3 games');
+  console.log('2♠ free-turn states seen:', twoSpades);
+  assert.equal(a.view.gameLog.length, 3, 'history recorded');
+  const seatByName = (n) => a.view.seats.findIndex((p) => p && p.name === n);
+  for (let gNo = 2; gNo <= 3; gNo++) {
+    assert.equal(firstTurn[gNo], seatByName(a.view.gameLog[gNo - 2].winner), 'game ' + gNo + ' opened by previous winner');
+  }
+
+  // end the session: host proposes, the other human agrees -> pairwise settlement
+  a.emit('proposeEnd');
+  await sleep(200);
+  assert(b.view.endVote && b.view.endVote.waiting.includes('Beni'), 'vote pending for Beni');
+  b.emit('voteEnd', { agree: true });
+  await sleep(300);
+  assert.equal(a.view.state, 'final', 'session finished');
+  const f = a.view.final;
+  const sc = f.players.map((p) => p.score);
+  assert.deepEqual(sc, [...sc].sort((x, y) => y - x), 'ranked highest points first');
+  assert.equal(f.pays.length, 6, '4 players -> 6 pairs');
+  for (const p of f.pays) assert.equal(p.amount, (f.players[p.fromRank - 1].score - f.players[p.toRank - 1].score) * 250);
+  assert.equal(f.players.reduce((s, p) => s + p.net, 0), 0, 'settlement nets to zero');
+  console.log('final', f.players.map((p) => p.name + ' ' + p.score + ' net ' + p.net).join(' | '));
+  console.log('pays', f.pays.map((p) => p.fromRank + '->' + p.toRank + ' ' + p.amount).join(', '));
+  // ----- saved history -----
+  await sleep(500);
+  const hist = (await api('/history', { token: tokA })).data;
+  assert.equal(hist.matches.length, 1, 'one saved session');
+  const m = hist.matches[0];
+  assert.equal(m.games, 3); assert.equal(m.mult, 250); assert(m.ended_at, 'session ended');
+  assert.equal(m.players.length, 4, 'all 4 players saved');
+  for (const p of f.players) {
+    const saved = m.players.find((x) => x.name === p.name);
+    assert.equal(saved.total_points, p.score, 'saved total for ' + p.name);
+    assert.equal(saved.net, p.net, 'saved net for ' + p.name);
+  }
+  assert.equal(hist.friends.length, 1, 'Beni is a friend'); assert.equal(hist.friends[0].name, 'Beni');
+  const det = (await api('/match/' + m.id, { token: tokA })).data;
+  assert.equal(det.games.length, 3);
+  for (const g of det.games) assert.equal(g.rows.length, 4, 'rows per game');
+  assert.equal((await api('/match/' + m.id)).status, 401, 'detail requires auth');
+  const st = (await api('/me', { token: tokB })).data.stats;
+  assert.equal(st.games, 3); assert.equal(st.matches, 1);
+  assert.equal(st.points, f.players.find((p) => p.name === 'Beni').score, 'Beni stats points');
+  console.log('saved', JSON.stringify(st));
+
+  a.emit('newSession');
+  await sleep(200);
+  assert.equal(a.view.state, 'lobby'); assert.equal(a.view.gameLog.length, 0);
+  assert(a.view.seats.every((p) => !p || p.score === 0), 'scores reset');
   assert.deepEqual([...a.errors, ...b.errors], [], 'no rejected suggested moves');
 
   // reconnect keeps the seat
   const seatBefore = b.view.you;
   b.disconnect();
   const b2 = client('Beni2');
-  const h = await call(b2, 'hello', { token: 'tokB' });
+  const h = await call(b2, 'hello', { auth: tokB });
   assert.equal(h.room, room, 'resumed room');
   await sleep(100);
   assert.equal(b2.view.you, seatBefore, 'same seat after reconnect');

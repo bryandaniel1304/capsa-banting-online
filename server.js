@@ -4,16 +4,20 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const R = require('./shared/rules');
+const store = require('./store');
+const accounts = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 const TURN_MS = 20000;
-const START_CHIPS = 2000000;
-const STAKES = [40000, 200000, 1000000, 5000000];
+const MULTS = [250, 500, 1000, 2000];
+const MAX_MULT = 1000000;
 const BOT_NAMES = ['Budi', 'Sari', 'Joko', 'Rina', 'Agus', 'Dewi', 'Tono', 'Lina'];
-const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻', '🦁', '🐷', '🐙', '🦄'];
+const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻', '🦁', '🐷', '🐙', '🦄', '🤖'];
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api', accounts.router());
 app.get('/rules.js', (_, res) => res.sendFile(path.join(__dirname, 'shared', 'rules.js')));
 app.get('/healthz', (_, res) => res.send('ok'));
 const server = http.createServer(app);
@@ -30,15 +34,18 @@ function makeCode() {
 }
 
 const clean = (s, n = 16) => String(s || '').replace(/[<>]/g, '').trim().slice(0, n);
+const validMult = (m) => Number.isInteger(m) && m >= 1 && m <= MAX_MULT;
 const occupied = (room) => room.seats.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
 const seatOf = (room, token) => room.seats.findIndex((p) => p && p.token === token);
 const humans = (room) => room.seats.filter((p) => p && !p.bot);
 
-function createRoom(stake) {
+function createRoom(mult) {
   const room = {
-    code: makeCode(), stake: STAKES.includes(stake) ? stake : STAKES[0],
+    code: makeCode(), mult: validMult(mult) ? mult : MULTS[0],
     hostToken: null, seats: [null, null, null, null], state: 'lobby',
     game: null, result: null, lastWinner: null, gameNo: 0, timer: null, botTimer: null, created: Date.now(),
+    history: [], endVote: null, final: null,
+    match: { id: null }, dbChain: Promise.resolve(),
   };
   rooms.set(room.code, room);
   return room;
@@ -48,6 +55,9 @@ function seatPlayer(room, player, prefer) {
   const seat = prefer != null && !room.seats[prefer] ? prefer : room.seats.findIndex((p) => !p);
   if (seat < 0) return -1;
   player.seat = seat;
+  player.score = player.score || 0;
+  player.games = player.games || 0;
+  player.wins = player.wins || 0;
   room.seats[seat] = player;
   if (!player.bot) tokenRoom.set(player.token, room.code);
   if (!room.hostToken && !player.bot) room.hostToken = player.token;
@@ -77,14 +87,11 @@ function startGame(room) {
   const seats = occupied(room);
   if (seats.length < 2) return 'Butuh minimal 2 pemain';
   clearTimeout(room.timer);
+  // 13 cards each; with fewer than 4 players the rest stays in the dealer's deck unplayed
   const deck = R.shuffle(R.newDeck());
   const hands = {};
   seats.forEach((s, i) => (hands[s] = R.sortHand(deck.slice(i * 13, i * 13 + 13))));
-  seats.forEach((s) => {
-    const p = room.seats[s];
-    if (p.chips < room.stake * 10) p.chips = START_CHIPS; // free gold refill
-    p.ready = false;
-  });
+  seats.forEach((s) => (room.seats[s].ready = false));
 
   // First game: holder of the lowest dealt card leads and must play it. Afterwards the last winner leads.
   let leader, mustInclude = null;
@@ -98,8 +105,13 @@ function startGame(room) {
   room.gameNo++;
   room.state = 'playing';
   room.result = null;
-  room.game = { hands, turn: leader, lastPlay: null, passed: [], mustInclude, history: [], deadline: 0, startedWith: seats };
-  io.to(room.code).emit('fx', { type: 'deal', stake: room.stake });
+  const bonus = {};
+  seats.forEach((s) => (bonus[s] = []));
+  room.game = {
+    hands, turn: leader, lastPlay: null, passed: [], mustInclude, history: [], deadline: 0,
+    startedWith: seats, bonus, ceki: [], dealerLeft: 52 - seats.length * 13,
+  };
+  io.to(room.code).emit('fx', { type: 'deal' });
   startTurn(room);
   return null;
 }
@@ -124,17 +136,38 @@ function doPlay(room, seat, cards) {
   if (!cards.every((c) => hand.includes(c))) return 'Kartu tidak valid';
   const ev = R.evaluate(cards);
   if (!ev) return 'Kombinasi tidak valid';
+  const leading = !g.lastPlay || g.free;
+  if (ev.kind === 'dragon' && !leading) return 'Dragon hanya bisa dibuang saat membuka ronde';
   if (g.mustInclude != null && !cards.includes(g.mustInclude)) return 'Giliran pertama harus memakai ' + R.label(g.mustInclude);
-  if (g.lastPlay && !R.beats(ev, g.lastPlay.ev)) {
+  if (!leading && !R.beats(ev, g.lastPlay.ev)) {
     return g.lastPlay.ev.count !== ev.count ? 'Harus ' + g.lastPlay.ev.count + ' kartu' : 'Kartu kurang tinggi';
   }
   g.hands[seat] = hand.filter((c) => !cards.includes(c));
   g.mustInclude = null;
+  g.free = false;
+  if (leading) { g.passed = []; g.history = []; }
   g.lastPlay = { seat, cards: [...cards].sort((a, b) => a - b), ev };
   g.history.push({ seat, cards: g.lastPlay.cards, name: ev.name });
   if (g.history.length > 4) g.history.shift();
   io.to(room.code).emit('fx', { type: 'play', seat, cards: g.lastPlay.cards, name: ev.name, kind: ev.kind });
-  if (!g.hands[seat].length) { endGame(room, seat); return null; }
+
+  const bonus = R.bonusFor(ev);
+  if (bonus) {
+    g.bonus[seat].push({ label: ev.name, points: bonus });
+    io.to(room.code).emit('fx', { type: 'bonus', seat, name: ev.name, points: bonus });
+  }
+  if (!g.hands[seat].length) { endGame(room, seat, ev, g.lastPlay.cards); return null; }
+  if (g.hands[seat].length === 1 && !g.ceki.includes(seat)) {
+    g.ceki.push(seat);
+    io.to(room.code).emit('fx', { type: 'ceki', seat });
+  }
+  if (R.freeTurnAfter(ev, cards)) {
+    // 2♠ can't be beaten: the same player plays again right away
+    g.free = true; g.passed = [];
+    io.to(room.code).emit('fx', { type: 'twoSpade', seat });
+    startTurn(room);
+    return null;
+  }
   advance(room, seat);
   return null;
 }
@@ -143,7 +176,7 @@ function doPass(room, seat) {
   const g = room.game;
   if (!g || room.state !== 'playing') return 'Permainan belum dimulai';
   if (g.turn !== seat) return 'Bukan giliranmu';
-  if (!g.lastPlay) return 'Kamu memulai ronde, harus buang kartu';
+  if (!g.lastPlay || g.free) return 'Kamu memulai ronde, harus buang kartu';
   g.passed.push(seat);
   io.to(room.code).emit('fx', { type: 'pass', seat });
   advance(room, seat);
@@ -166,30 +199,81 @@ function advance(room, from) {
   }
 }
 
-function endGame(room, winner) {
+// Points per game (lower is better): winner -10 (-20 when closing with a single 2),
+// losers +cards left x (1-6: 1, 7-9: 2, 10-12: 3, 13: 4) and +10 per 2 still in hand,
+// plus package bonuses for whoever played them (a dragon win is -70 only).
+function endGame(room, winner, finalEv, finalCards) {
   const g = room.game;
   clearTimeout(room.timer); clearTimeout(room.botTimer);
   const rows = [];
-  let won = 0;
   for (const s of g.startedWith) {
-    if (s === winner) continue;
     const p = room.seats[s];
     const left = (g.hands[s] || []).length;
-    const pts = R.penaltyPoints(left);
-    let pay = pts * room.stake;
-    if (p) { pay = Math.min(pay, p.chips); p.chips -= pay; }
-    won += pay;
-    rows.push({ seat: s, name: p ? p.name : '-', avatar: p ? p.avatar : '?', left, cards: g.hands[s] || [], points: -pts, delta: -pay });
+    const items = [];
+    if (s === winner) {
+      const wp = R.winPoints(finalEv, finalCards);
+      if (wp) items.push({ label: wp === R.WIN_WITH_TWO_POINTS ? 'Menang tutup 2' : 'Menang', points: wp });
+    } else {
+      items.push({ label: 'Sisa ' + left + ' kartu ×' + R.penaltyPerCard(left), points: R.penaltyPoints(left) });
+      const twos = R.twosLeft(g.hands[s] || []);
+      if (twos) items.push({ label: 'Sisa ' + twos + ' kartu 2', points: twos * R.TWO_LEFT_POINTS });
+    }
+    items.push(...g.bonus[s]);
+    const points = items.reduce((a, b) => a + b.points, 0);
+    if (p) {
+      p.score += points; p.games++;
+      if (s === winner) p.wins++;
+    }
+    rows.push({
+      seat: s, name: p ? p.name : '-', avatar: p ? p.avatar : '?', left, cards: g.hands[s] || [],
+      items, points, total: p ? p.score : points, winner: s === winner,
+    });
   }
-  const wp = room.seats[winner];
-  wp.chips += won;
-  rows.unshift({ seat: winner, name: wp.name, avatar: wp.avatar, left: 0, cards: [], points: 0, delta: won, winner: true });
-  room.result = { winner, rows, stake: room.stake };
+  rows.sort((a, b) => b.winner - a.winner || a.points - b.points);
+  room.result = { winner, rows, mult: room.mult, dragon: finalEv.kind === 'dragon' };
+  room.history.push({
+    no: room.history.length + 1, winner: room.seats[winner].name, at: Date.now(),
+    rows: rows.map((r) => ({ seat: r.seat, name: r.name, points: r.points, detail: r.items.map((i) => i.label + ' ' + i.points).join(', ') })),
+  });
+  persistGame(room, rows);
   room.lastWinner = winner;
   room.state = 'result';
   room.seats.forEach((p) => p && (p.ready = !!p.bot));
-  io.to(room.code).emit('fx', { type: 'win', seat: winner, amount: won });
+  io.to(room.code).emit('fx', { type: 'win', seat: winner });
   broadcast(room);
+}
+
+// ---------- persistence (accounts' play history) ----------
+const pkeyOf = (p) => (p.userId ? 'u:' + p.userId : p.token);
+
+// DB writes run in order per room and never block the game.
+function dbTask(room, fn) {
+  room.dbChain = room.dbChain.then(fn).catch((e) => console.error('db error', room.code, e.message));
+}
+async function ensureMatch(room, match) {
+  if (!match.id) match.id = await store.createMatch(room.code, room.mult);
+  return match.id;
+}
+function persistGame(room, rows) {
+  const match = room.match;
+  const last = room.history[room.history.length - 1];
+  const game = {
+    gameNo: last.no, winnerName: last.winner, mult: room.mult,
+    rows: rows.map((r) => {
+      const p = room.seats[r.seat];
+      return { pkey: p ? pkeyOf(p) : 'seat:' + r.seat, userId: p && p.userId, name: r.name, points: r.points, left: r.left,
+        detail: r.items.map((i) => i.label + ' ' + i.points).join(', '), winner: r.winner };
+    }),
+    totals: room.seats.filter((p) => p && p.games).map((p) => ({
+      pkey: pkeyOf(p), userId: p.userId, name: p.name, avatar: p.avatar, bot: !p.userId, score: p.score, wins: p.wins, games: p.games,
+    })),
+  };
+  dbTask(room, async () => store.recordGame(await ensureMatch(room, match), game));
+}
+function persistFinal(room) {
+  const match = room.match;
+  const final = { mult: room.mult, players: room.final.players.map((p, i) => ({ pkey: p.pkey, rank: i + 1, net: p.net })) };
+  dbTask(room, async () => { if (match.id) await store.finishMatch(match.id, final); });
 }
 
 // Timeouts / disconnected players: lead the lowest card, otherwise pass.
@@ -197,7 +281,7 @@ function autoAct(room) {
   const g = room.game;
   if (!g || room.state !== 'playing') return;
   const seat = g.turn;
-  if (!g.lastPlay) doPlay(room, seat, [g.mustInclude != null ? g.mustInclude : Math.min(...g.hands[seat])]);
+  if (!g.lastPlay || g.free) doPlay(room, seat, [g.mustInclude != null ? g.mustInclude : Math.min(...g.hands[seat])]);
   else doPass(room, seat);
 }
 
@@ -206,8 +290,9 @@ function botAct(room) {
   if (!g || room.state !== 'playing') return;
   const seat = g.turn;
   const hand = g.hands[seat];
-  let pick = R.suggest(hand, g.lastPlay ? g.lastPlay.ev : null, g.mustInclude);
-  if (pick && g.lastPlay) {
+  const toBeat = g.lastPlay && !g.free ? g.lastPlay.ev : null;
+  let pick = R.suggest(hand, toBeat, g.mustInclude);
+  if (pick && toBeat) {
     // hold back 2s early unless an opponent is close to going out
     const danger = occupied(room).some((s) => s !== seat && g.hands[s] && g.hands[s].length <= 3);
     const usesTwo = pick.some((c) => R.rankOf(c) === R.RANK_TWO);
@@ -216,8 +301,52 @@ function botAct(room) {
   if (pick) doPlay(room, seat, pick); else doPass(room, seat);
 }
 
+// Final settlement: rank by total points (highest = #1). Every higher-ranked player pays every
+// lower-ranked player (difference in points) x multiplier.
+function settle(room) {
+  const players = room.seats.filter(Boolean).map((p) => ({ seat: p.seat, pkey: pkeyOf(p), name: p.name, avatar: p.avatar, score: p.score, wins: p.wins, games: p.games }));
+  players.sort((a, b) => b.score - a.score);
+  const pays = [];
+  players.forEach((p) => (p.net = 0));
+  for (let i = 0; i < players.length; i++) {
+    for (let j = players.length - 1; j > i; j--) {
+      const diff = players[i].score - players[j].score;
+      const amount = diff * room.mult;
+      pays.push({ from: players[i].name, fromRank: i + 1, to: players[j].name, toRank: j + 1, diff, amount });
+      players[i].net -= amount; players[j].net += amount;
+    }
+  }
+  return { players, pays, mult: room.mult, games: room.history.length, at: Date.now() };
+}
+
+function finishSession(room) {
+  clearTimeout(room.timer);
+  room.final = settle(room);
+  persistFinal(room);
+  room.state = 'final';
+  room.endVote = null;
+  io.to(room.code).emit('fx', { type: 'final' });
+  broadcast(room);
+}
+
+function checkEndVote(room) {
+  const v = room.endVote;
+  if (!v) return;
+  const voters = room.seats.filter((p) => p && !p.bot);
+  if (voters.some((p) => v.votes[p.token] === false)) {
+    const who = voters.find((p) => v.votes[p.token] === false);
+    room.endVote = null;
+    io.to(room.code).emit('toast', { msg: who.name + ' menolak mengakhiri permainan' });
+    broadcast(room);
+    maybeAutoStart(room);
+    return;
+  }
+  if (voters.every((p) => v.votes[p.token] === true)) finishSession(room);
+  else broadcast(room);
+}
+
 function maybeAutoStart(room) {
-  if (room.state !== 'result') return;
+  if (room.state !== 'result' || room.endVote) return;
   const seats = occupied(room);
   if (seats.length >= 2 && seats.every((s) => room.seats[s].ready)) {
     clearTimeout(room.timer);
@@ -231,23 +360,34 @@ function viewFor(room, token) {
   const g = room.game;
   const playing = room.state === 'playing';
   return {
-    code: room.code, stake: room.stake, state: room.state, gameNo: room.gameNo,
+    code: room.code, mult: room.mult, mults: MULTS, state: room.state, gameNo: room.gameNo,
     you: me, host: seatOf(room, room.hostToken),
     seats: room.seats.map((p, i) => p && {
-      name: p.name, avatar: p.avatar, chips: p.chips, bot: !!p.bot, connected: !!(p.bot || p.connected), ready: !!p.ready,
+      name: p.name, avatar: p.avatar, score: p.score, games: p.games, wins: p.wins,
+      bot: !!p.bot, connected: !!(p.bot || p.connected), ready: !!p.ready,
       count: playing && g.hands[i] ? g.hands[i].length : 0,
       passed: playing && g.passed.includes(i),
       inGame: playing && !!g.hands[i],
+      bonus: playing && g.bonus[i] ? g.bonus[i].reduce((a, b) => a + b.points, 0) : 0,
     }),
     hand: playing && me >= 0 && g.hands[me] ? g.hands[me] : [],
+    dealerLeft: playing ? g.dealerLeft : 0,
     turn: playing ? g.turn : -1,
     remaining: playing ? Math.max(0, g.deadline - Date.now()) : 0,
     turnMs: TURN_MS,
     lastPlay: playing && g.lastPlay ? { seat: g.lastPlay.seat, cards: g.lastPlay.cards, name: g.lastPlay.ev.name } : null,
     history: playing ? g.history : [],
     mustInclude: playing ? g.mustInclude : null,
+    free: playing && !!g.free,
     result: room.result,
-    stakes: STAKES,
+    gameLog: room.history,
+    endVote: room.endVote && {
+      by: room.endVote.by,
+      agreed: room.seats.filter((p) => p && !p.bot && room.endVote.votes[p.token] === true).map((p) => p.name),
+      waiting: room.seats.filter((p) => p && !p.bot && room.endVote.votes[p.token] == null).map((p) => p.name),
+      myVote: room.endVote.votes[token] == null ? null : room.endVote.votes[token],
+    },
+    final: room.final,
   };
 }
 
@@ -259,12 +399,13 @@ function broadcast(room) {
 
 // ---------- sockets ----------
 io.on('connection', (socket) => {
-  let token = null;
+  let token = null; // room identity: 'u:<userId>' for logged-in players
+  let user = null;
   const roomOf = () => { const c = token && tokenRoom.get(token); return c ? rooms.get(c) : null; };
   const fail = (msg) => socket.emit('toast', { msg, error: true });
   const ack = (cb, v) => typeof cb === 'function' && cb(v);
-  const newPlayer = (name, avatar) => ({
-    token, name: clean(name) || 'Pemain', avatar: AVATARS.includes(avatar) ? avatar : '🦊', chips: START_CHIPS, bot: false,
+  const newPlayer = () => ({
+    token, userId: user.id, name: clean(user.name, 14) || user.username, avatar: user.avatar || '🦊', bot: false,
   });
 
   function attach(room, p) {
@@ -288,30 +429,33 @@ io.on('connection', (socket) => {
     } else {
       removePlayer(room, s);
     }
-    if (rooms.has(room.code)) { io.to(room.code).emit('toast', { msg: p.name + ' keluar' }); broadcast(room); }
+    if (rooms.has(room.code)) { io.to(room.code).emit('toast', { msg: p.name + ' keluar' }); broadcast(room); checkEndVote(room); }
   }
 
-  socket.on('hello', ({ token: t } = {}, cb) => {
-    token = clean(t, 64);
+  // Logged-in players only: the account's session token identifies the player on every device.
+  socket.on('hello', async ({ auth } = {}, cb) => {
+    try { user = await store.userByToken(auth); } catch (e) { console.error('auth', e.message); user = null; }
+    token = user ? 'u:' + user.id : null;
+    if (!user) return ack(cb, { room: null, user: null });
     const room = roomOf();
     const p = room && room.seats[seatOf(room, token)];
-    if (p) { attach(room, p); return ack(cb, { room: room.code }); }
-    ack(cb, { room: null });
+    if (p) { p.name = clean(user.name, 14) || p.name; p.avatar = user.avatar || p.avatar; attach(room, p); return ack(cb, { room: room.code, user }); }
+    ack(cb, { room: null, user });
   });
 
-  socket.on('create', ({ name, avatar, stake } = {}, cb) => {
-    if (!token) return fail('Sesi tidak valid');
+  socket.on('create', ({ mult } = {}, cb) => {
+    if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
     const old = roomOf();
     if (old) leave(old);
-    const room = createRoom(+stake);
-    const p = newPlayer(name, avatar);
+    const room = createRoom(+mult);
+    const p = newPlayer();
     seatPlayer(room, p, 0);
     attach(room, p);
     ack(cb, { room: room.code });
   });
 
-  socket.on('join', ({ code, name, avatar } = {}, cb) => {
-    if (!token) return fail('Sesi tidak valid');
+  socket.on('join', ({ code } = {}, cb) => {
+    if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
     const room = rooms.get(clean(code, 8).toUpperCase());
     if (!room) return ack(cb, { error: 'Meja tidak ditemukan' });
     const existing = seatOf(room, token);
@@ -323,7 +467,7 @@ io.on('connection', (socket) => {
     const old = roomOf();
     if (old) leave(old);
     room.seats[seat] = null; // replaces a bot if the table was full of bots
-    const p = newPlayer(name, avatar);
+    const p = newPlayer();
     seatPlayer(room, p, seat);
     attach(room, p);
     io.to(room.code).emit('toast', { msg: p.name + ' bergabung' });
@@ -336,13 +480,15 @@ io.on('connection', (socket) => {
     const room = roomOf();
     if (!room || room.state === 'playing') return;
     if (room.hostToken !== token) return fail('Hanya host yang bisa memulai');
+    if (room.state === 'final') return fail('Mulai sesi baru dulu');
+    if (room.endVote) return fail('Sedang voting untuk mengakhiri permainan');
     const err = startGame(room);
     if (err) fail(err);
   });
 
   socket.on('ready', () => {
     const room = roomOf();
-    if (!room || room.state !== 'result') return;
+    if (!room || room.state !== 'result' || room.endVote) return;
     const p = room.seats[seatOf(room, token)];
     if (p) p.ready = true;
     broadcast(room);
@@ -355,8 +501,8 @@ io.on('connection', (socket) => {
     if (!(seat >= 0 && seat < 4) || room.seats[seat]) return;
     const used = room.seats.filter(Boolean).map((p) => p.name);
     const name = BOT_NAMES.find((n) => !used.includes(n)) || 'Bot';
-    const avatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
-    seatPlayer(room, { token: 'bot-' + Math.random().toString(36).slice(2), name, avatar, chips: START_CHIPS, bot: true, ready: true, connected: true }, seat);
+    const avatar = AVATARS[Math.floor(Math.random() * (AVATARS.length - 1))];
+    seatPlayer(room, { token: 'bot-' + Math.random().toString(36).slice(2), name, avatar, bot: true, ready: true, connected: true }, seat);
     broadcast(room);
     maybeAutoStart(room);
   });
@@ -371,10 +517,53 @@ io.on('connection', (socket) => {
     if (rooms.has(room.code)) broadcast(room);
   });
 
-  socket.on('stake', ({ stake } = {}) => {
+  socket.on('mult', ({ mult } = {}) => {
     const room = roomOf();
-    if (!room || room.hostToken !== token || room.state === 'playing' || !STAKES.includes(+stake)) return;
-    room.stake = +stake;
+    if (!room || room.hostToken !== token || room.state === 'playing') return;
+    if (!validMult(+mult)) return fail('Pengali harus 1 - ' + MAX_MULT.toLocaleString('id-ID'));
+    room.mult = +mult;
+    broadcast(room);
+  });
+
+  function resetSession(room) {
+    room.seats.forEach((p) => p && Object.assign(p, { score: 0, games: 0, wins: 0, ready: !!p.bot }));
+    room.history = []; room.final = null; room.endVote = null; room.result = null; room.lastWinner = null;
+    room.match = { id: null }; // next games belong to a new saved session
+    room.state = 'lobby';
+  }
+
+  socket.on('resetScores', () => {
+    const room = roomOf();
+    if (!room || room.hostToken !== token || room.state === 'playing') return;
+    resetSession(room);
+    io.to(room.code).emit('toast', { msg: 'Poin & riwayat direset' });
+    broadcast(room);
+  });
+
+  // Ending the whole session needs every human player to agree.
+  socket.on('proposeEnd', () => {
+    const room = roomOf();
+    if (!room || room.hostToken !== token || room.endVote) return;
+    if (room.state !== 'result' && room.state !== 'lobby') return fail('Tunggu game selesai dulu');
+    if (!room.history.length) return fail('Belum ada game yang dimainkan');
+    clearTimeout(room.timer);
+    room.endVote = { by: room.seats[seatOf(room, token)].name, votes: { [token]: true } };
+    io.to(room.code).emit('toast', { msg: room.endVote.by + ' mengusulkan mengakhiri permainan' });
+    checkEndVote(room);
+  });
+
+  socket.on('voteEnd', ({ agree } = {}) => {
+    const room = roomOf();
+    if (!room || !room.endVote || seatOf(room, token) < 0) return;
+    room.endVote.votes[token] = !!agree;
+    checkEndVote(room);
+  });
+
+  socket.on('newSession', () => {
+    const room = roomOf();
+    if (!room || room.hostToken !== token || room.state !== 'final') return;
+    resetSession(room);
+    io.to(room.code).emit('toast', { msg: 'Sesi baru dimulai, poin direset' });
     broadcast(room);
   });
 
@@ -423,4 +612,8 @@ setInterval(() => {
   }
 }, 60000);
 
-server.listen(PORT, () => console.log('Capsa Banting Online on http://localhost:' + PORT));
+store.init().then((kind) => {
+  if (kind === 'pglite') console.log('Database: embedded PGlite (~/.capsa-banting-online). Set DATABASE_URL to use Postgres in production.');
+  else console.log('Database: Postgres');
+  server.listen(PORT, () => console.log('Capsa Banting Online on http://localhost:' + PORT));
+}).catch((e) => { console.error('Database init failed:', e); process.exit(1); });
