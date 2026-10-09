@@ -64,13 +64,18 @@ const validMult = (m) => Number.isInteger(m) && m >= 1 && m <= MAX_MULT;
 const occupied = (room) => room.seats.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
 const seatOf = (room, token) => room.seats.findIndex((p) => p && p.token === token);
 const humans = (room) => room.seats.filter((p) => p && !p.bot);
+// a human who is offline, or who came back and chose not to continue, doesn't hold the table up
+const isAway = (p) => !!p && !p.bot && (!!p.sitOut || !p.connected);
+const activeHumans = (room) => room.seats.filter((p) => p && !p.bot && !isAway(p));
+const awaySeats = (room) => occupied(room).filter((s) => isAway(room.seats[s]));
+const hostAway = (room) => isAway(room.seats[seatOf(room, room.hostToken)]) || seatOf(room, room.hostToken) < 0;
 
 function createRoom(mult) {
   const room = {
     code: makeCode(), mult: validMult(mult) ? mult : MULTS[0],
     hostToken: null, seats: [null, null, null, null], state: 'lobby',
     game: null, result: null, lastWinner: null, gameNo: 0, timer: null, botTimer: null, created: Date.now(),
-    history: [], endVote: null, final: null,
+    history: [], endVote: null, final: null, departed: [],
     match: { id: null }, dbChain: Promise.resolve(),
   };
   rooms.set(room.code, room);
@@ -94,13 +99,20 @@ function removePlayer(room, seat) {
   const p = room.seats[seat];
   if (!p) return;
   room.seats[seat] = null;
-  if (!p.bot) { tokenRoom.delete(p.token); notifyPresence(p.userId); }
+  // whoever leaves mid-session still counts in the final settlement
+  if (p.games && room.state !== 'final') {
+    room.departed.push({ pkey: pkeyOf(p), userId: p.userId || null, name: p.name, avatar: p.avatar, bot: !!p.bot, score: p.score, wins: p.wins, games: p.games });
+  }
+  if (!p.bot) {
+    if (tokenRoom.get(p.token) === room.code) tokenRoom.delete(p.token); // they may already sit at another table
+    notifyPresence(p.userId);
+  }
   if (room.hostToken === p.token) {
-    const h = humans(room)[0];
+    const h = activeHumans(room)[0] || humans(room).find((x) => !x.sitOut);
     room.hostToken = h ? h.token : null;
   }
   if (room.lastWinner === seat) room.lastWinner = null;
-  if (!humans(room).length) destroyRoom(room);
+  if (!humans(room).some((x) => !x.sitOut)) destroyRoom(room);
 }
 
 function destroyRoom(room) {
@@ -120,10 +132,10 @@ function serializeRoom(room) {
   return JSON.stringify({
     v: 1, code: room.code, mult: room.mult, hostToken: room.hostToken, state: room.state, gameNo: room.gameNo,
     lastWinner: room.lastWinner, created: room.created, history: room.history, result: room.result, final: room.final,
-    endVote: room.endVote, matchId: room.match.id, game: room.game,
+    endVote: room.endVote, matchId: room.match.id, game: room.game, departed: room.departed,
     seats: room.seats.map((p) => p && {
       token: p.token, userId: p.userId || null, name: p.name, avatar: p.avatar, bot: !!p.bot,
-      score: p.score || 0, games: p.games || 0, wins: p.wins || 0, ready: !!p.ready,
+      score: p.score || 0, games: p.games || 0, wins: p.wins || 0, ready: !!p.ready, sitOut: !!p.sitOut,
     }),
   });
 }
@@ -144,14 +156,14 @@ function restoreRoom(d) {
     code: d.code, mult: d.mult, hostToken: d.hostToken, seats: [null, null, null, null], state: d.state,
     game: d.game, result: d.result, lastWinner: d.lastWinner, gameNo: d.gameNo || 0, timer: null, botTimer: null,
     created: d.created || now, lastActive: now, graceUntil: now + RECONNECT_GRACE_MS,
-    history: d.history || [], endVote: d.endVote || null, final: d.final || null,
+    history: d.history || [], endVote: d.endVote || null, final: d.final || null, departed: d.departed || [],
     match: { id: d.matchId || null }, dbChain: Promise.resolve(),
   };
   (d.seats || []).forEach((sp, i) => {
     if (!sp) return;
     const p = { ...sp, seat: i, connected: !!sp.bot, socketId: null, voice: false, muted: false, awaySince: now };
     room.seats[i] = p;
-    if (!p.bot) tokenRoom.set(p.token, room.code);
+    if (!p.bot && !p.sitOut) tokenRoom.set(p.token, room.code);
   });
   rooms.set(room.code, room);
   if (room.state === 'playing' && room.game) {
@@ -285,19 +297,57 @@ function doPass(room, seat) {
 }
 
 // Counter-clockwise turn order. A pass locks the player out until the round ends.
+// Players who chose not to continue are skipped: their hand stays as it is until the game ends.
 function advance(room, from) {
   const g = room.game;
-  for (let k = 1; k <= 4; k++) {
+  for (let k = 1; k <= 8; k++) {
     const t = (from + k) % 4;
-    if (!g.hands[t] || g.passed.includes(t)) continue;
+    if (!g.hands[t]) continue;
     if (g.lastPlay && t === g.lastPlay.seat) { // everyone else passed -> new round
       g.lastPlay = null; g.passed = []; g.history = [];
       io.to(room.code).emit('fx', { type: 'newround', seat: t });
     }
+    if (g.passed.includes(t) || room.seats[t].sitOut) continue; // a sat-out last player hands the lead to the next one
     g.turn = t;
     startTurn(room);
     return;
   }
+}
+
+// The player whose turn it is stops playing: move on without them.
+function skipTurn(room, seat) {
+  const g = room.game;
+  g.mustInclude = null; // the opening card was theirs
+  if (g.free) { g.free = false; g.lastPlay = null; g.passed = []; g.history = []; } // their 2♠ free lead goes to the next player
+  advance(room, seat);
+}
+
+// A player who came back after a disconnect and chose not to continue: their hand is not played any more
+// but still counts when the game ends. After the game, the others decide whether to go on without them.
+function sitOut(room, seat) {
+  const p = room.seats[seat];
+  if (!p || p.bot || p.sitOut) return;
+  if (p.voice) { p.voice = false; p.muted = false; io.to(room.code).emit('voice:left', { seat }); }
+  Object.assign(p, { sitOut: true, ready: false, connected: false, socketId: null, awaySince: p.awaySince || Date.now() });
+  if (tokenRoom.get(p.token) === room.code) tokenRoom.delete(p.token);
+  notifyPresence(p.userId);
+  if (!humans(room).some((x) => !x.sitOut)) { destroyRoom(room); return; } // nobody left to play on
+  if (room.hostToken === p.token) room.hostToken = (activeHumans(room)[0] || humans(room).find((x) => !x.sitOut)).token;
+  io.to(room.code).emit('toast', { msg: p.name + ' tidak melanjutkan permainan' });
+  if (room.state === 'lobby' || room.state === 'final') {
+    removePlayer(room, seat);
+    if (rooms.has(room.code)) broadcast(room);
+    return;
+  }
+  if (room.state === 'playing' && room.game.turn === seat) skipTurn(room, seat);
+  onAway(room);
+}
+
+// Someone went offline or stopped playing: whoever is still here decides from now on.
+function onAway(room) {
+  // at the result screen the others confirm again, now knowing they continue without that player
+  if (room.state === 'result') activeHumans(room).forEach((p) => (p.ready = false));
+  if (room.endVote) checkEndVote(room); else broadcast(room);
 }
 
 // Points per game (lower is better): winner -10 (-20 when closing with a single 2),
@@ -406,7 +456,11 @@ function botAct(room) {
 // Final settlement: rank by total points (highest = #1). Every higher-ranked player pays every
 // lower-ranked player (difference in points) x multiplier.
 function settle(room) {
-  const players = room.seats.filter(Boolean).map((p) => ({ seat: p.seat, pkey: pkeyOf(p), name: p.name, avatar: p.avatar, score: p.score, wins: p.wins, games: p.games }));
+  const players = [
+    ...room.seats.filter(Boolean).map((p) => ({ seat: p.seat, pkey: pkeyOf(p), name: p.name, avatar: p.avatar, score: p.score, wins: p.wins, games: p.games })),
+    // players who left during the session still pay / get paid for the games they played
+    ...room.departed.map((d) => ({ seat: -1, pkey: d.pkey, name: d.name, avatar: d.avatar, score: d.score, wins: d.wins, games: d.games, gone: true })),
+  ];
   players.sort((a, b) => b.score - a.score);
   const pays = [];
   players.forEach((p) => (p.net = 0));
@@ -432,29 +486,42 @@ function finishSession(room) {
   broadcast(room);
 }
 
+// Only the players who are here vote: someone offline (or no longer playing) can't block ending the session.
 function checkEndVote(room) {
   const v = room.endVote;
   if (!v) return;
-  const voters = room.seats.filter((p) => p && !p.bot);
-  if (voters.some((p) => v.votes[p.token] === false)) {
-    const who = voters.find((p) => v.votes[p.token] === false);
+  const voters = activeHumans(room);
+  const who = voters.find((p) => v.votes[p.token] === false);
+  if (who) {
     room.endVote = null;
     io.to(room.code).emit('toast', { msg: who.name + ' menolak mengakhiri permainan' });
     broadcast(room);
     maybeAutoStart(room);
     return;
   }
-  if (voters.every((p) => v.votes[p.token] === true)) finishSession(room);
+  if (voters.length && voters.every((p) => v.votes[p.token] === true)) finishSession(room);
   else broadcast(room);
 }
 
+// The next game starts once everyone who is here has confirmed. Players who are offline or chose not to
+// continue don't hold the table up: confirming then means going on without them, and they leave the table
+// (their points stay in the session's final settlement).
+const allHereReady = (room) => room.seats.every((p) => !p || isAway(p) || p.ready);
 function maybeAutoStart(room) {
   if (room.state !== 'result' || room.endVote) return;
-  const seats = occupied(room);
-  if (seats.length >= 2 && seats.every((s) => room.seats[s].ready)) {
-    clearTimeout(room.timer);
-    room.timer = setTimeout(() => room.state === 'result' && startGame(room), 1200);
-  }
+  if (!activeHumans(room).length || !allHereReady(room)) return;
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => {
+    if (room.state !== 'result' || room.endVote || !activeHumans(room).length || !allHereReady(room)) return; // someone came back meanwhile
+    for (const s of awaySeats(room)) {
+      const p = room.seats[s];
+      io.to(room.code).emit('toast', { msg: p.name + ' dikeluarkan dari meja (' + (p.sitOut ? 'tidak melanjutkan' : 'offline') + ')' });
+      removePlayer(room, s);
+    }
+    if (!rooms.has(room.code)) return;
+    if (occupied(room).length >= 2) startGame(room);
+    else { room.state = 'lobby'; room.result = null; broadcast(room); } // not enough players left: back to the lobby
+  }, 1200);
 }
 
 // ---------- views ----------
@@ -464,10 +531,11 @@ function viewFor(room, token) {
   const playing = room.state === 'playing';
   return {
     code: room.code, mult: room.mult, mults: MULTS, state: room.state, gameNo: room.gameNo,
-    you: me, host: seatOf(room, room.hostToken),
+    you: me, host: seatOf(room, room.hostToken), hostAway: hostAway(room),
     seats: room.seats.map((p, i) => p && {
       name: p.name, avatar: p.avatar, score: p.score, games: p.games, wins: p.wins,
       bot: !!p.bot, connected: !!(p.bot || p.connected), ready: !!p.ready, voice: !!p.voice, muted: !!p.muted, userId: p.userId || null,
+      away: isAway(p), sitOut: !!p.sitOut,
       count: playing && g.hands[i] ? g.hands[i].length : 0,
       passed: playing && g.passed.includes(i),
       inGame: playing && !!g.hands[i],
@@ -486,8 +554,9 @@ function viewFor(room, token) {
     gameLog: room.history,
     endVote: room.endVote && {
       by: room.endVote.by,
-      agreed: room.seats.filter((p) => p && !p.bot && room.endVote.votes[p.token] === true).map((p) => p.name),
-      waiting: room.seats.filter((p) => p && !p.bot && room.endVote.votes[p.token] == null).map((p) => p.name),
+      agreed: activeHumans(room).filter((p) => room.endVote.votes[p.token] === true).map((p) => p.name),
+      waiting: activeHumans(room).filter((p) => room.endVote.votes[p.token] == null).map((p) => p.name),
+      away: humans(room).filter(isAway).map((p) => p.name), // offline / not continuing: not part of the vote
       myVote: room.endVote.votes[token] == null ? null : room.endVote.votes[token],
     },
     final: room.final,
@@ -516,7 +585,8 @@ io.on('connection', (socket) => {
 
   function attach(room, p) {
     if (p.voice && p.socketId !== socket.id) voiceLeave(room, p); // voice connections belong to the old socket
-    p.socketId = socket.id; p.connected = true; p.awaySince = null;
+    p.socketId = socket.id; p.connected = true; p.awaySince = null; p.sitOut = false;
+    tokenRoom.set(p.token, room.code);
     socket.join(room.code);
     broadcast(room);
     notifyPresence(p.userId);
@@ -611,8 +681,38 @@ io.on('connection', (socket) => {
     // after a restart the table may only exist in the database: bring it back
     const room = roomOf() || (await restoreForPlayer(token));
     const p = room && room.seats[seatOf(room, token)];
-    if (p) { p.name = clean(user.name, 14) || p.name; p.avatar = user.avatar || p.avatar; attach(room, p); return ack(cb, { room: room.code, user }); }
+    if (p && !p.sitOut) {
+      p.name = clean(user.name, 14) || p.name; p.avatar = user.avatar || p.avatar;
+      if (p.socketId === socket.id) return ack(cb, { room: room.code, user });
+      // coming back after a disconnect: don't drop the player straight into the table, ask first (resume / abandon)
+      return ack(cb, { room: null, user, resume: resumeInfo(room, token) });
+    }
     ack(cb, { room: null, user });
+  });
+
+  function resumeInfo(room, tok) {
+    const s = seatOf(room, tok);
+    const g = room.state === 'playing' && room.game;
+    return {
+      code: room.code, mult: room.mult, state: room.state, gameNo: room.gameNo, games: room.history.length,
+      cards: g && g.hands[s] ? g.hands[s].length : 0,
+      players: room.seats.filter((p) => p && p.token !== tok).map((p) => ({ name: p.name, bot: !!p.bot, online: !isAway(p), sitOut: !!p.sitOut })),
+    };
+  }
+
+  socket.on('resume', (_, cb) => {
+    const room = roomOf();
+    const p = room && room.seats[seatOf(room, token)];
+    if (!p || p.sitOut) return ack(cb, { error: 'Kamu sudah tidak ada di meja itu' });
+    attach(room, p);
+    ack(cb, { room: room.code });
+  });
+
+  socket.on('abandon', (_, cb) => {
+    const room = roomOf();
+    const s = room ? seatOf(room, token) : -1;
+    if (s >= 0 && !room.seats[s].connected) sitOut(room, s); // still playing on another device: leave it alone
+    ack(cb, {});
   });
 
   socket.on('create', ({ mult } = {}, cb) => {
@@ -632,7 +732,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(want) || (await restoreByCode(want));
     if (!room) return ack(cb, { error: 'Meja tidak ditemukan' });
     const existing = seatOf(room, token);
-    if (existing >= 0) { attach(room, room.seats[existing]); return ack(cb, { room: room.code }); }
+    if (existing >= 0) {
+      const old = roomOf();
+      if (old && old !== room) leave(old);
+      attach(room, room.seats[existing]);
+      return ack(cb, { room: room.code });
+    }
     if (room.state === 'playing') return ack(cb, { error: 'Permainan sedang berlangsung, coba lagi setelah ronde selesai' });
     let seat = room.seats.findIndex((p) => !p);
     if (seat < 0) seat = room.seats.findIndex((p) => p && p.bot);
@@ -641,6 +746,9 @@ io.on('connection', (socket) => {
     if (old) leave(old);
     room.seats[seat] = null; // replaces a bot if the table was full of bots
     const p = newPlayer();
+    // back at a table they left earlier in this session: continue with their points
+    const d = room.departed.findIndex((x) => x.pkey === pkeyOf(p));
+    if (d >= 0) { const [was] = room.departed.splice(d, 1); Object.assign(p, { score: was.score, games: was.games, wins: was.wins }); }
     seatPlayer(room, p, seat);
     attach(room, p);
     io.to(room.code).emit('toast', { msg: p.name + ' bergabung' });
@@ -699,8 +807,9 @@ io.on('connection', (socket) => {
   });
 
   function resetSession(room) {
+    for (const s of occupied(room)) if (room.seats[s].sitOut) removePlayer(room, s);
     room.seats.forEach((p) => p && Object.assign(p, { score: 0, games: 0, wins: 0, ready: !!p.bot }));
-    room.history = []; room.final = null; room.endVote = null; room.result = null; room.lastWinner = null;
+    room.history = []; room.final = null; room.endVote = null; room.result = null; room.lastWinner = null; room.departed = [];
     room.match = { id: null }; // next games belong to a new saved session
     room.state = 'lobby';
   }
@@ -716,7 +825,10 @@ io.on('connection', (socket) => {
   // Ending the whole session needs every human player to agree.
   socket.on('proposeEnd', () => {
     const room = roomOf();
-    if (!room || room.hostToken !== token || room.endVote) return;
+    const me = room && room.seats[seatOf(room, token)];
+    if (!me || isAway(me) || room.endVote) return;
+    // the host decides; if the host is gone, or players dropped out after a game, anyone still here may end it
+    if (room.hostToken !== token && !hostAway(room) && !(room.state === 'result' && awaySeats(room).length)) return fail('Hanya host yang bisa mengakhiri permainan');
     if (room.state !== 'result' && room.state !== 'lobby') return fail('Tunggu game selesai dulu');
     if (!room.history.length) return fail('Belum ada game yang dimainkan');
     clearTimeout(room.timer);
@@ -727,7 +839,8 @@ io.on('connection', (socket) => {
 
   socket.on('voteEnd', ({ agree } = {}) => {
     const room = roomOf();
-    if (!room || !room.endVote || seatOf(room, token) < 0) return;
+    const me = room && room.seats[seatOf(room, token)];
+    if (!me || !room.endVote || isAway(me)) return;
     room.endVote.votes[token] = !!agree;
     checkEndVote(room);
   });
@@ -770,9 +883,9 @@ io.on('connection', (socket) => {
     if (!p || p.socketId !== socket.id) return;
     voiceLeave(room, p);
     p.connected = false; p.socketId = null; p.awaySince = Date.now();
-    broadcast(room);
+    onAway(room); // the players still here decide on ending / continuing without them
     // a disconnected player keeps their seat, cards and points; their turn simply runs on the normal timer.
-    // Only free a seat at a fresh table where nothing has been played yet.
+    // After a game the others may continue without them. A seat at a fresh table where nothing has been played yet is freed.
     setTimeout(() => {
       if (!rooms.has(room.code) || p.connected || room.seats[p.seat] !== p) return;
       if (room.state === 'lobby' && !room.history.length) { removePlayer(room, p.seat); if (rooms.has(room.code)) broadcast(room); }

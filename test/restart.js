@@ -73,10 +73,12 @@ function client(auth, autoplay) {
 
   a = client(A.token, false); b = client(B.token, false);
   const ha = await a.hello();
-  assert.equal(ha.room, room, 'player is put back at the same table');
+  assert.equal(ha.resume && ha.resume.code, room, 'player is offered the same table');
+  assert.equal((await call(a, 'resume')).room, room, 'player is put back at the same table');
   await sleep(200);
   const hb = await b.hello();
-  assert.equal(hb.room, room, 'second player back at the same table');
+  assert.equal(hb.resume && hb.resume.code, room, 'second player is offered the same table');
+  assert.equal((await call(b, 'resume')).room, room, 'second player back at the same table');
   await sleep(300);
   const after = a.view;
   assert.equal(after.state, 'playing', 'still playing');

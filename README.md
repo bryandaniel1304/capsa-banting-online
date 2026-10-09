@@ -43,7 +43,9 @@ This prints a public `https://*.trycloudflare.com` link. It works while your PC 
 4. Select cards by tapping (or dragging across them), or tap a suggestion chip; tap it again to play. Use **Buang** to play and **Lewat** to pass. ⇅ sorts by rank or suit.
 5. After each game everyone taps **Lanjut Main**, and the next game starts automatically.
 
-If you refresh or lose connection you go back to the same seat. If your turn runs out (20 s), you auto-pass, or you play your lowest card when leading.
+If you refresh or lose connection, you're asked first whether to continue at your table (**Lanjutkan** / **Tidak**). If your turn runs out (20 s), you auto-pass, or you play your lowest card when leading.
+- **Tidak**: your hand is no longer played but still counts when the game ends. After that game, the remaining players choose to continue without you (you leave the table, and your points stay in the final settlement) or to end the session.
+- Offline players never block the table: ending the session needs only the players who are online, and after a game the others can continue without them.
 Tip: on Android Chrome, "Add to Home screen" gives a fullscreen, landscape app.
 
 ## Accounts & saved history

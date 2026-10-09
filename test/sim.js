@@ -264,12 +264,14 @@ function client(name) {
   assert(a.view.seats.every((p) => !p || p.score === 0), 'scores reset');
   assert.deepEqual([...a.errors, ...b.errors], [], 'no rejected suggested moves');
 
-  // reconnect keeps the seat
+  // reconnect keeps the seat, after the player confirms going back to the table
   const seatBefore = b.view.you;
   b.disconnect();
   const b2 = client('Beni2');
   const h = await call(b2, 'hello', { auth: tokB });
-  assert.equal(h.room, room, 'resumed room');
+  assert.equal(h.room, null, 'not put back at the table without asking');
+  assert.equal(h.resume && h.resume.code, room, 'asked to resume the table');
+  assert.equal((await call(b2, 'resume')).room, room, 'resumed room');
   await sleep(100);
   assert.equal(b2.view.you, seatBefore, 'same seat after reconnect');
   console.log('simulation ok');

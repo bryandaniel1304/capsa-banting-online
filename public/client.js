@@ -159,6 +159,8 @@
       if (me.user) refreshFriends();
       if (!me.user && authToken) { authToken = null; store.set('auth', null); }
       if (res && res.room) return;
+      if (res && res.resume) return askResume(res.resume);
+      if (V) { const code = V.code; goHome(); toast('Kamu sudah tidak ada di meja ' + code, true); return; } // removed while away
       const want = new URLSearchParams(location.search).get('room');
       if (want && me.user) joinRoom(want);
       else { if (want) $('#codeInput').value = want.toUpperCase(); showHome(); }
@@ -186,6 +188,36 @@
     ];
   }
   socket.on('disconnect', connLost);
+
+  // Back after a disconnect (or on another device): ask before going back to the table.
+  let resumeOpen = false;
+  async function askResume(info) {
+    if (resumeOpen) return;
+    resumeOpen = true;
+    if (!V) showHome(); // fresh page: show the (logged-in) home screen behind the question
+    const who = info.players.map((p) => p.name + (p.bot ? ' (bot)' : p.sitOut ? ' (tidak lanjut)' : p.online ? '' : ' (offline)')).join(', ') || '-';
+    const now = info.state === 'playing' ? 'Game #' + info.gameNo + ' masih berlangsung' + (info.cards ? ', kartumu sisa ' + info.cards : '') + '.'
+      : info.state === 'result' ? 'Game #' + info.gameNo + ' sudah selesai.'
+      : info.state === 'final' ? 'Permainan sudah diakhiri.' : 'Meja menunggu dimulai.';
+    const no = info.state === 'playing' ? 'Jika tidak, kartumu tidak dimainkan lagi tapi tetap dihitung poinnya. Setelah game ini, pemain lain memutuskan lanjut tanpa kamu.'
+      : info.state === 'result' ? 'Jika tidak, pemain lain memutuskan lanjut tanpa kamu. Poinmu tetap dihitung di hasil akhir.'
+      : 'Jika tidak, kamu keluar dari meja.';
+    const ok = await ask({
+      title: '🔄 Lanjutkan Permainan?',
+      text: ['Koneksimu sempat terputus dari meja ' + info.code + ' (x' + num(info.mult) + '). ' + now, 'Pemain lain: ' + who, no],
+      ok: 'Lanjutkan', cancel: 'Tidak',
+    });
+    resumeOpen = false;
+    if (ok) {
+      leftCode = null;
+      socket.emit('resume', null, (res) => { if (res && res.error) { toast(res.error, true); goHome(); } });
+    } else {
+      leftCode = info.code;
+      socket.emit('abandon', null, () => {});
+      goHome();
+      toast('Kamu tidak melanjutkan meja ' + info.code);
+    }
+  }
   socket.io.on('reconnect_attempt', () => { if (!socket.connected && $('#conn').classList.contains('hidden')) connLost(); });
 
   // Keep the free server awake while the app is open (Render sleeps without HTTP traffic).
@@ -312,7 +344,7 @@
   function ask({ title, text, input, numeric = true, ok = 'Ya', cancel = 'Batal' }) {
     return new Promise((resolve) => {
       const el = $('#ask');
-      el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? '<p>' + esc(text) + '</p>' : '') +
+      el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? [].concat(text).map((t) => '<p>' + esc(t) + '</p>').join('') : '') +
         (input != null ? '<input id="askInput"' + (numeric ? ' inputmode="numeric"' : ' readonly') + ' autocomplete="off" value="' + esc(input) + '">' : '') +
         '<div class="row"><button class="btn green" id="askOk">' + esc(ok) + '</button><button class="btn ghost dark" id="askNo">' + esc(cancel) + '</button></div></div>';
       el.classList.remove('hidden');
@@ -396,12 +428,13 @@
     const playing = V.state === 'playing';
     const turn = playing && V.turn === seat;
     el.classList.toggle('turn', turn);
-    el.classList.toggle('offline', !p.connected);
+    el.classList.toggle('offline', !!p.away);
     const tags = [];
     if (V.host === seat) tags.push('<span class="tag">HOST</span>');
     if (p.bot) tags.push('<span class="tag bot">BOT</span>');
     if (V.state === 'result' && p.ready) tags.push('<span class="tag ready">SIAP</span>');
-    if (!p.connected) tags.push('<span class="tag">OFFLINE</span>');
+    if (p.sitOut) tags.push('<span class="tag away">TIDAK LANJUT</span>');
+    else if (!p.connected) tags.push('<span class="tag">OFFLINE</span>');
     const showCount = playing && p.inGame && !isMe;
     const kick = V.host === V.you && !isMe && !playing ? '<div class="seat-acts"><button data-kick="' + seat + '">Keluarkan</button></div>' : '';
     el.innerHTML =
@@ -677,7 +710,10 @@
     const r = V.result;
     const iWon = r.winner === V.you;
     const meReady = V.seats[V.you] && V.seats[V.you].ready;
-    const waiting = V.seats.filter((p) => p && !p.ready).map((p) => p.name);
+    const away = V.seats.filter((p) => p && p.away); // offline / not continuing: they don't hold the table up
+    const awayNames = away.map((p) => p.name).join(', ');
+    const waiting = V.seats.filter((p) => p && !p.away && !p.ready).map((p) => p.name);
+    const canEnd = V.host === V.you || V.hostAway || away.length;
     const winName = V.seats[r.winner] ? V.seats[r.winner].name : 'Pemenang';
     el.classList.remove('hidden');
     el.innerHTML = '<div class="result-box"><div class="result-head"><div class="crown">' + (r.dragon ? '🐉' : '👑') + '</div><div class="title">' +
@@ -690,17 +726,42 @@
         '<div>' + (row.cards.length ? miniHTML(row.cards) : '') + '</div>' +
         '<div class="delta ' + (row.points <= 0 ? 'pos' : 'neg') + '">' + pts(row.points) + '<small>' + num(row.points * r.mult) + '</small></div>' +
         '<div class="delta tot ' + (row.total <= 0 ? 'pos' : 'neg') + '">' + pts(row.total) + '<small>' + num(row.total * r.mult) + '</small></div></div>').join('') + '</div>' +
-      '<div class="result-foot">' + (meReady ? '<span class="wait">Sudah konfirmasi. Menunggu: ' + esc(waiting.join(', ')) + '</span>' : '<button class="btn green" id="readyBtn">✔ Konfirmasi &amp; Lanjut</button>') +
-      (V.host === V.you ? '<button class="btn red small" id="endBtn">🏁 Akhiri Permainan</button>' : '') +
+      (away.length ? '<div class="away-note">⚠️ ' + esc(away.map((p) => p.name + (p.sitOut ? ' tidak melanjutkan' : ' offline')).join(', ')) +
+        '. Jika lanjut, ' + esc(awayNames) + ' dikeluarkan dari meja (poin tetap dihitung di hasil akhir).</div>' : '') +
+      '<div class="result-foot">' + (meReady ? '<span class="wait">Sudah konfirmasi. Menunggu: ' + esc(waiting.join(', ') || '-') + '</span>'
+        : '<button class="btn green" id="readyBtn">✔ ' + (away.length ? 'Lanjut tanpa ' + esc(awayNames) : 'Konfirmasi &amp; Lanjut') + '</button>') +
+      (canEnd ? '<button class="btn red small" id="endBtn">🏁 Akhiri Permainan</button>' : '') +
       '<button class="btn ghost small dark" id="resHist">📜 Riwayat</button></div></div>';
     const rb = $('#readyBtn'); if (rb) rb.onclick = () => socket.emit('ready');
     const eb = $('#endBtn'); if (eb) eb.onclick = proposeEnd;
     $('#resHist').onclick = openHistory;
+    if (away.length && !meReady && !V.endVote) {
+      const key = V.code + ':' + V.gameNo + ':' + away.map((p) => p.name).join(',');
+      if (key !== contKey) { contKey = key; setTimeout(() => promptContinue(key), 1200); } // let the result show first
+    }
+  }
+
+  // Someone went offline or chose not to continue: the players still here decide whether to go on without them.
+  let contKey = '';
+  async function promptContinue(key) {
+    const still = () => V && V.state === 'result' && !V.endVote && V.seats[V.you] && !V.seats[V.you].ready && contKey === key;
+    if (!still()) return;
+    const away = V.seats.filter((p) => p && p.away);
+    if (!away.length) return;
+    const names = away.map((p) => p.name).join(', ');
+    const ok = await ask({
+      title: '▶️ Lanjutkan Permainan?',
+      text: [away.map((p) => p.name + (p.sitOut ? ' tidak melanjutkan permainan' : ' sedang offline')).join(', ') + '.',
+        'Lanjutkan dengan pemain yang tersisa? ' + names + ' akan dikeluarkan dari meja, poinnya tetap dihitung di hasil akhir.'],
+      ok: 'Lanjutkan', cancel: 'Akhiri Permainan',
+    });
+    if (!still()) return;
+    socket.emit(ok ? 'ready' : 'proposeEnd');
   }
 
   // ---------- end of session: vote, settlement, history ----------
   async function proposeEnd() {
-    const ok = await ask({ title: '🏁 Akhiri Permainan?', text: 'Hitung pembayaran akhir dengan pengali x' + num(V.mult) + '. Semua pemain harus setuju.', ok: 'Akhiri', cancel: 'Batal' });
+    const ok = await ask({ title: '🏁 Akhiri Permainan?', text: 'Hitung pembayaran akhir dengan pengali x' + num(V.mult) + '. Semua pemain yang online harus setuju.', ok: 'Akhiri', cancel: 'Batal' });
     if (ok) socket.emit('proposeEnd');
   }
   function renderVote() {
@@ -710,7 +771,8 @@
     el.classList.remove('hidden');
     el.innerHTML = '<div class="dialog vote-box"><div class="dlg-title">🏁 Akhiri Permainan?</div>' +
       '<p><b>' + esc(v.by) + '</b> mengusulkan mengakhiri keseluruhan permainan dan menghitung pembayaran (pengali x' + num(V.mult) + ').</p>' +
-      '<p class="muted">Setuju: ' + esc(v.agreed.join(', ') || '-') + '<br>Menunggu: ' + esc(v.waiting.join(', ') || '-') + '</p>' +
+      '<p class="muted">Setuju: ' + esc(v.agreed.join(', ') || '-') + '<br>Menunggu: ' + esc(v.waiting.join(', ') || '-') +
+      (v.away && v.away.length ? '<br>Tidak ikut memilih (offline / tidak lanjut): ' + esc(v.away.join(', ')) : '') + '</p>' +
       (v.myVote == null ? '<div class="row"><button class="btn green" id="voteYes">Setuju</button><button class="btn red" id="voteNo">Tolak</button></div>'
         : '<p class="muted">Kamu sudah memilih ' + (v.myVote ? 'Setuju' : 'Tolak') + '.</p>') + '</div>';
     const y = $('#voteYes'); if (y) y.onclick = () => socket.emit('voteEnd', { agree: true });
@@ -747,7 +809,7 @@
 
     // 1) ranking
     const ranking = '<h4>Peringkat (' + f.games + ' game) · semakin rendah poin semakin bagus</h4><div class="tbl-wrap"><table class="hist"><tr><th>#</th><th>Pemain</th><th>Total poin</th><th>Menang</th><th>Bersih</th></tr>' +
-      P.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(p.avatar) + ' ' + esc(p.name) + '</td><td class="' + (p.score <= 0 ? 'good' : 'bad') + '">' + pts(p.score) + '</td><td>' + p.wins + '</td><td class="' + (p.net >= 0 ? 'good' : 'bad') + '"><b>' + money(p.net) + '</b></td></tr>').join('') + '</table></div>';
+      P.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(p.avatar) + ' ' + esc(p.name) + (p.gone ? ' <span class="muted">(keluar)</span>' : '') + '</td><td class="' + (p.score <= 0 ? 'good' : 'bad') + '">' + pts(p.score) + '</td><td>' + p.wins + '</td><td class="' + (p.net >= 0 ? 'good' : 'bad') + '"><b>' + money(p.net) + '</b></td></tr>').join('') + '</table></div>';
 
     // 2) every pair: points difference x multiplier
     const pairs = '<h4>Selisih Poin per Pasangan</h4><div class="pays">' + f.pays.map((x) =>
@@ -888,13 +950,17 @@
     else showLink(url);
   }
   const showLink = (url) => ask({ title: 'Link Meja', text: 'Salin link ini dan kirim ke teman', input: url, numeric: false, ok: 'Tutup', cancel: 'Batal' });
+  function goHome() {
+    voiceStop();
+    V = null; setRoomUrl(null);
+    ['#menu', '#result', '#final', '#history', '#vote'].forEach((s) => $(s).classList.add('hidden'));
+    showHome();
+  }
   function leave() {
     leftCode = V ? V.code : null;
     voiceStop();
     socket.emit('leave', null, () => {});
-    V = null; setRoomUrl(null);
-    ['#menu', '#result', '#final', '#history', '#vote'].forEach((s) => $(s).classList.add('hidden'));
-    showHome();
+    goHome();
   }
   $('#shareBtn').onclick = share;
   $('#menuBtn').onclick = () => $('#menu').classList.remove('hidden');
@@ -942,7 +1008,10 @@
     '<p><b>Ceki</b>: pemain yang tinggal 1 kartu otomatis mengumumkan "CEKI!".</p>' +
     '<p>Bermain bertiga: tetap 13 kartu per orang, 13 kartu sisanya disimpan di deck bandar dan tidak dimainkan. Aturan poin sama.</p>' +
     '<p>Nilai = poin × pengali meja (x250, x500, x1000, x2000 atau custom).</p>' +
-    '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil sebelum lanjut. Host bisa mengusulkan mengakhiri permainan, dan semua pemain harus setuju. ' +
+    '<h4>Koneksi Terputus</h4><p>Jika koneksimu terputus, saat kembali kamu ditanya dulu apakah ingin melanjutkan permainan di meja itu. ' +
+    'Jika tidak, kartumu tidak dimainkan lagi tapi tetap dihitung poinnya. Setelah game itu selesai, pemain yang tersisa memilih lanjut tanpa kamu (kamu dikeluarkan dari meja, poinmu tetap masuk hasil akhir) atau mengakhiri permainan. ' +
+    'Pemain yang offline juga tidak menghambat: keputusan lanjut atau mengakhiri ada di tangan pemain yang masih online.</p>' +
+    '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil sebelum lanjut. Host bisa mengusulkan mengakhiri permainan, dan semua pemain yang online harus setuju. ' +
     'Pemain diurutkan dari total poin tertinggi (#1) ke terendah (#4). Setiap pasangan dibayar: (poin pemain atas - poin pemain bawah) × pengali, dari pemain berpoin lebih tinggi ke yang lebih rendah: 1→4, 1→3, 1→2, 2→4, 2→3, 3→4.</p></div></div>';
   const openRules = () => $('#rules').classList.remove('hidden');
   $('#rulesBtn').onclick = openRules; $('#rulesBtnHome').onclick = openRules;
