@@ -339,6 +339,20 @@
     logoutLocal();
     socket.disconnect(); socket.connect();
   };
+  // change password from a signed-in device (also the way back in if the password was forgotten)
+  $('#pwBtn').onclick = async () => {
+    if (!me.user) return;
+    const p1 = await ask({ title: '🔑 Password Baru', text: 'Minimal 6 karakter', input: '', password: true, ok: 'Lanjut' });
+    if (p1 == null) return;
+    if (p1.length < 6) return toast('Password minimal 6 karakter', true);
+    const p2 = await ask({ title: 'Ulangi Password Baru', text: 'Ketik sekali lagi', input: '', password: true, ok: 'Simpan' });
+    if (p2 == null) return;
+    if (p1 !== p2) return toast('Password tidak sama, coba lagi', true);
+    try {
+      await api('/password', { method: 'POST', body: { newPassword: p1 } });
+      toast('🔑 Password diganti. Perangkat lain otomatis keluar.');
+    } catch (e) { toast(e.message, true); }
+  };
   const needLogin = () => { if (me.user) return false; toast('Masuk atau daftar dulu ya', true); return true; };
   function showTable() {
     $('#home').classList.add('hidden');
@@ -350,11 +364,11 @@
     '<div class="t-range">' + (t.mult ? '<span class="fit">1 poin</span><span class="fit">= ' + num(t.mult) + '</span>' : '<span class="fit">Atur</span><span class="fit">sendiri</span>') + '</div></button>').join('');
   $('#tiers').querySelectorAll('.t-head, .t-stake').forEach((el) => el.classList.add('fit'));
   // In-page dialogs: native confirm()/prompt() are blocked in many in-app browsers.
-  function ask({ title, text, input, numeric = true, readonly = false, ok = 'Ya', cancel = 'Batal' }) {
+  function ask({ title, text, input, numeric = true, readonly = false, password = false, ok = 'Ya', cancel = 'Batal' }) {
     return new Promise((resolve) => {
       const el = $('#ask');
       el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? [].concat(text).map((t) => '<p>' + esc(t) + '</p>').join('') : '') +
-        (input != null ? '<input id="askInput"' + (numeric ? ' inputmode="numeric"' : '') + (readonly ? ' readonly' : '') + ' autocomplete="off" maxlength="40" value="' + esc(input) + '">' : '') +
+        (input != null ? '<input id="askInput"' + (password ? ' type="password" autocomplete="new-password" maxlength="100"' : ' autocomplete="off" maxlength="40"') + (numeric && !password ? ' inputmode="numeric"' : '') + (readonly ? ' readonly' : '') + ' value="' + esc(input) + '">' : '') +
         '<div class="row"><button class="btn green" id="askOk">' + esc(ok) + '</button><button class="btn ghost dark" id="askNo">' + esc(cancel) + '</button></div></div>';
       el.classList.remove('hidden');
       const done = (v) => { el.classList.add('hidden'); el.innerHTML = ''; resolve(v); };

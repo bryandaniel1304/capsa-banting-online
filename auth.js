@@ -95,6 +95,22 @@ function router(hooks = {}) {
     } catch (e) { next(e); }
   });
 
+  // Change password while signed in. The signed-in session proves ownership, so the old password is only
+  // checked when given (players who forgot it can still set a new one from a device that is logged in).
+  r.post('/password', auth, async (req, res, next) => {
+    try {
+      const { newPassword, currentPassword } = req.body || {};
+      if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 100) return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
+      if (currentPassword) {
+        const u = await store.findUserByUsername(req.user.username);
+        if (!verifyPassword(String(currentPassword), u.pass_hash)) return res.status(401).json({ error: 'Password lama salah' });
+      }
+      await store.setPassword(req.user.id, hashPassword(newPassword));
+      await store.deleteOtherSessions(req.user.id, bearer(req));
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
   r.get('/history', auth, async (req, res, next) => {
     try { res.json(await store.history(req.user.id)); } catch (e) { next(e); }
   });

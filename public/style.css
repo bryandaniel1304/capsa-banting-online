@@ -442,3 +442,5 @@ table.hist td small { opacity: .75; }
 .ts-row button { font-size: 15px; font-weight: 800; border-radius: 12px; padding: 0 16px; letter-spacing: .05em; }
 #tsOk { background: linear-gradient(180deg, #fbeab0, #dfbd62 42%, #b48a35); color: #2a1c07; }
 #tsCancel { background: rgba(255,255,255,.08); border: 1px solid var(--line); color: var(--gold-hi); }.re-foot .btn { font-size: calc(var(--u)*3.1); padding: calc(var(--u)*1.1) calc(var(--u)*3); }
+
+.link-btn { align-self: center; color: var(--muted); font-size: calc(var(--u)*2.9); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; padding: 0; }

@@ -56,6 +56,16 @@ function client(rc) {
   assert.equal((await api('/users/' + B.user.id, { token: A.token })).data.relation, 'outgoing');
   assert.equal((await api('/users/' + A.user.id, { token: B.token })).data.relation, 'incoming');
   assert.equal((await api('/users/' + A.user.id, { token: A.token })).data.relation, 'self');
+  // ----- change password from a signed-in device (forgot-password path) -----
+  const other = (await api('/login', { method: 'POST', body: { username: 'eko', password: 'rahasia2' } })).data.token; // second device
+  assert.equal((await api('/password', { method: 'POST', token: B.token, body: { newPassword: '123' } })).status, 400, 'too short');
+  assert.equal((await api('/password', { method: 'POST', token: B.token, body: { newPassword: 'barubaru1', currentPassword: 'salah' } })).status, 401, 'wrong current password');
+  assert.equal((await api('/password', { method: 'POST', body: { newPassword: 'barubaru1' } })).status, 401, 'needs a session');
+  assert.equal((await api('/password', { method: 'POST', token: B.token, body: { newPassword: 'barubaru1' } })).status, 200, 'changed without old password');
+  assert.equal((await api('/me', { token: other })).status, 401, 'other devices signed out');
+  assert.equal((await api('/me', { token: B.token })).status, 200, 'this device stays signed in');
+  assert.equal((await api('/login', { method: 'POST', body: { username: 'eko', password: 'rahasia2' } })).status, 401, 'old password no longer works');
+  assert.equal((await api('/login', { method: 'POST', body: { username: 'eko', password: 'barubaru1' } })).status, 200, 'new password works');
   console.log('presets + profiles ok');
 
   // ----- table rules -----

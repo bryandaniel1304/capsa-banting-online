@@ -155,6 +155,13 @@ async function userByToken(token) {
   if (!token || typeof token !== 'string') return null;
   return one('select u.id, u.username, u.name, u.avatar from auth_sessions s join users u on u.id = s.user_id where s.token_hash = $1', [sha(token)]);
 }
+async function setPassword(userId, passHash) {
+  await q('update users set pass_hash = $2 where id = $1', [userId, passHash]);
+}
+// sign out every other device after a password change
+async function deleteOtherSessions(userId, keepToken) {
+  await q('delete from auth_sessions where user_id = $1 and token_hash <> $2', [userId, sha(keepToken || '')]);
+}
 async function deleteSession(token) {
   if (token) await q('delete from auth_sessions where token_hash = $1', [sha(token)]);
 }
@@ -331,6 +338,6 @@ module.exports = {
   saveLiveRoom, deleteLiveRoom, liveRoomByCode, liveRoomForPlayer, pruneLiveRooms,
   requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,
   init, kind: () => db && db.kind,
-  findUserByUsername, createUser, updateUser, createSession, userByToken, deleteSession,
+  findUserByUsername, createUser, updateUser, createSession, userByToken, deleteSession, setPassword, deleteOtherSessions,
   createMatch, recordGame, finishMatch, stats, history, matchDetail,
 };
