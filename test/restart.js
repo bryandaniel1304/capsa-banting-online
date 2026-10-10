@@ -60,7 +60,13 @@ function client(auth, autoplay) {
     if (v.state === 'playing' && v.hand.length <= 11 && (v.turn === v.you || v.turn === b.view.you)) break;
   }
   a.autoplay = false; b.autoplay = false;
-  await sleep(1200); // let the throttled save land
+  // wait until bots are done and the table is quiet (a human's turn, unchanged for 1.5s), so the save has landed
+  for (let i = 0, last = '', since = Date.now(); i < 300; i++) {
+    await sleep(100);
+    const k = JSON.stringify([a.view.turn, a.view.lastPlay, a.view.seats.map((p) => p && p.count)]);
+    if (k !== last) { last = k; since = Date.now(); continue; }
+    if ((a.view.turn === a.view.you || a.view.turn === b.view.you) && Date.now() - since > 1500) break;
+  }
   const before = { a: a.view, b: b.view };
   assert.equal(before.a.state, 'playing', 'game in progress before restart');
   console.log('before restart: game', before.a.gameNo, 'turn seat', before.a.turn, 'my cards', before.a.hand.length, 'table', before.a.lastPlay ? before.a.lastPlay.name : '-');
@@ -85,6 +91,7 @@ function client(auth, autoplay) {
   assert.equal(after.gameNo, before.a.gameNo, 'same game');
   assert.deepEqual(after.hand, before.a.hand, 'same cards in hand');
   assert.deepEqual(b.view.hand, before.b.hand, 'same cards for the other player');
+  if (after.turn !== before.a.turn) console.log('DEBUG before', JSON.stringify({ turn: before.a.turn, you: before.a.you, bYou: before.b.you, lastPlay: before.a.lastPlay, seats: before.a.seats.map((p) => p && [p.name, p.count, p.passed]), rem: before.a.remaining }), 'after', JSON.stringify({ turn: after.turn, lastPlay: after.lastPlay, seats: after.seats.map((p) => p && [p.name, p.count, p.passed]), rem: after.remaining }));
   assert.equal(after.turn, before.a.turn, 'same turn');
   assert.deepEqual(after.lastPlay, before.a.lastPlay, 'same cards on the table');
   assert.equal(after.mult, 500, 'same multiplier');

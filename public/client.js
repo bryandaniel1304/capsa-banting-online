@@ -1,6 +1,12 @@
 /* Capsa Banting Online — client */
 (() => {
   const R = window.CapsaRules;
+  let G = R.make(); // game logic for the current table's rules
+  let gKey = '';
+  function syncRules(v) {
+    const k = JSON.stringify(v.rules || null);
+    if (k !== gKey) { gKey = k; G = R.make(v.rules); }
+  }
   const $ = (s) => document.querySelector(s);
   const stage = $('#stage');
   const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻', '🦁', '🐷', '🐙', '🦄'];
@@ -230,6 +236,7 @@
     leftCode = null;
     const prev = V;
     V = v;
+    syncRules(v);
     deadline = Date.now() + v.remaining;
     if (!prev || prev.code !== v.code) { setRoomUrl(v.code); }
     if (v.state === 'playing' && (!prev || prev.gameNo !== v.gameNo)) {
@@ -337,15 +344,17 @@
     $('#home').classList.add('hidden');
     $('#table').classList.remove('hidden');
   }
-  $('#tiers').innerHTML = TIERS.map((t) =>
-    '<button class="tier" data-mult="' + t.mult + '"><div class="t-head">' + t.name + '</div><div class="t-art">' + t.art + '</div><div class="t-stake">' + (t.mult ? 'x' + num(t.mult) : 'x ?') + '</div><div class="t-range">' + (t.mult ? '<span class="fit">1 poin</span><span class="fit">= ' + num(t.mult) + '</span>' : '<span class="fit">Atur</span><span class="fit">sendiri</span>') + '</div></button>').join('');
+  $('#tiers').innerHTML = TIERS.map((t, i) =>
+    '<button class="tier tier' + i + '" data-mult="' + t.mult + '"><div class="t-head fit">' + t.name + '</div>' +
+    '<div class="chip"><div class="chip-in"><span class="fit">' + (t.mult ? 'x' + num(t.mult) : 'x ?') + '</span></div></div>' +
+    '<div class="t-range">' + (t.mult ? '<span class="fit">1 poin</span><span class="fit">= ' + num(t.mult) + '</span>' : '<span class="fit">Atur</span><span class="fit">sendiri</span>') + '</div></button>').join('');
   $('#tiers').querySelectorAll('.t-head, .t-stake').forEach((el) => el.classList.add('fit'));
   // In-page dialogs: native confirm()/prompt() are blocked in many in-app browsers.
-  function ask({ title, text, input, numeric = true, ok = 'Ya', cancel = 'Batal' }) {
+  function ask({ title, text, input, numeric = true, readonly = false, ok = 'Ya', cancel = 'Batal' }) {
     return new Promise((resolve) => {
       const el = $('#ask');
       el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? [].concat(text).map((t) => '<p>' + esc(t) + '</p>').join('') : '') +
-        (input != null ? '<input id="askInput"' + (numeric ? ' inputmode="numeric"' : ' readonly') + ' autocomplete="off" value="' + esc(input) + '">' : '') +
+        (input != null ? '<input id="askInput"' + (numeric ? ' inputmode="numeric"' : '') + (readonly ? ' readonly' : '') + ' autocomplete="off" maxlength="40" value="' + esc(input) + '">' : '') +
         '<div class="row"><button class="btn green" id="askOk">' + esc(ok) + '</button><button class="btn ghost dark" id="askNo">' + esc(cancel) + '</button></div></div>';
       el.classList.remove('hidden');
       const done = (v) => { el.classList.add('hidden'); el.innerHTML = ''; resolve(v); };
@@ -378,7 +387,8 @@
     const mult = +t.dataset.mult || await askMult();
     if (!mult) return;
     unlockAudio();
-    socket.emit('create', { mult }, (res) => res && res.error && toast(res.error, true));
+    const choice = rulesChoice();
+    socket.emit('create', { mult, rules: choice.rules, rulesName: choice.name }, (res) => res && res.error && toast(res.error, true));
   };
   function joinRoom(code) {
     if (String(code).toUpperCase() === leftCode) leftCode = null;
@@ -403,6 +413,8 @@
     $('#stakeLbl').textContent = 'x' + num(v.mult);
     $('#potVal').textContent = 'x' + num(v.mult);
     $('#soundBtn').textContent = muted ? '🔇' : '🔊';
+    const order = G.suitsAscending.slice().reverse().join(' › ');
+    document.querySelectorAll('.suit-order').forEach((e) => (e.textContent = order));
     for (let s = 0; s < 4; s++) renderSeat(s);
     renderCenter(prev);
     renderLobby();
@@ -450,7 +462,15 @@
 
   $('#table').addEventListener('click', (e) => {
     const b = e.target.closest('[data-bot],[data-kick],[data-inv]');
-    if (!b) return;
+    if (!b) {
+      const prof = e.target.closest('.seat .ava-wrap, .seat .plate');
+      if (prof && V) {
+        const relIdx = +prof.closest('.seat').id.replace('seat', '');
+        const seat = (relIdx + Math.max(0, V.you)) % 4;
+        if (V.seats[seat]) openProfile(seat);
+      }
+      return;
+    }
     if (b.dataset.bot) socket.emit('addBot', { seat: +b.dataset.bot });
     if (b.dataset.kick) socket.emit('kick', { seat: +b.dataset.kick });
     if (b.dataset.inv) share();
@@ -497,6 +517,8 @@
     el.innerHTML =
       '<h3>Kode Meja</h3><div class="code">' + V.code + '</div>' +
       '<div class="sub">Bagikan kode/link ke teman. ' + n + '/4 pemain di meja. Pengali x' + num(V.mult) + '</div>' +
+      '<div class="row rules-row"><span class="rules-sum">📋 ' + esc(rulesLabel(V.rules, V.rulesName)) + '</span>' +
+      (V.canEditRules ? '<button class="btn ghost small" id="lobbyRules">⚙️ Atur Aturan</button>' : '<button class="btn ghost small" id="lobbyRules">Lihat Aturan</button>') + '</div>' +
       (isHost
         ? '<div class="stake-pick">' + V.mults.map((m) => '<button data-mult="' + m + '" class="' + (m === V.mult ? 'on' : '') + '">x' + num(m) + '</button>').join('') +
           '<button data-mult="custom" class="' + (V.mults.includes(V.mult) ? '' : 'on') + '">' + (V.mults.includes(V.mult) ? 'Custom' : 'x' + num(V.mult)) + '</button></div>' +
@@ -507,6 +529,7 @@
     const sb = $('#startBtn'); if (sb) sb.onclick = () => { unlockAudio(); socket.emit('start'); };
     const rb = $('#resetBtn'); if (rb) rb.onclick = async () => (await ask({ title: 'Reset Poin?', text: 'Semua poin dan riwayat akan direset ke 0.', ok: 'Reset' })) && socket.emit('resetScores');
     $('#lobbyShare').onclick = share;
+    $('#lobbyRules').onclick = () => (V.canEditRules ? openRulesEditor({ mode: 'table', rules: V.rules, name: V.rulesName }) : openRules());
     el.querySelectorAll('[data-mult]').forEach((b) => (b.onclick = async () => {
       const m = b.dataset.mult === 'custom' ? await askMult(V.mult) : +b.dataset.mult;
       if (m) socket.emit('mult', { mult: m });
@@ -526,7 +549,7 @@
     const set = new Set(hand);
     handOrder = handOrder.filter((c) => set.has(c));
     const missing = hand.filter((c) => !handOrder.includes(c));
-    if (missing.length) handOrder = R.sortHand(handOrder.concat(missing), sortMode);
+    if (missing.length) handOrder = G.sortHand(handOrder.concat(missing), sortMode);
     for (const c of [...selected]) if (!set.has(c)) selected.delete(c);
   }
   function renderHand() {
@@ -603,24 +626,24 @@
 
   function myTurn() { return V && V.state === 'playing' && V.turn === V.you; }
   // after 2♠ the same player leads freely, so there is nothing to beat
-  function lastEv() { return V.lastPlay && !V.free ? R.evaluate(V.lastPlay.cards) : null; }
+  function lastEv() { return V.lastPlay && !V.free ? G.evaluate(V.lastPlay.cards) : null; }
 
   // up to three suggestions, weakest first (like the "Kartu Tinggi / Sepasang" chips)
   function suggestions() {
     if (!myTurn()) return [];
-    let cands = R.allCombos(V.hand);
+    let cands = G.allCombos(V.hand);
     if (V.mustInclude != null) cands = cands.filter((c) => c.cards.includes(V.mustInclude));
     const le = lastEv();
     const str = (c) => (c.ev.kind === 'five' ? c.ev.type * 1e7 : 0) + c.ev.key;
-    if (le) cands = cands.filter((c) => R.beats(c.ev, le)).sort((a, b) => str(a) - str(b));
-    else if (R.isDragon(V.hand)) {
-      return [{ cards: [...V.hand], ev: R.evaluate(V.hand), sig: 'dragon' }];
+    if (le) cands = cands.filter((c) => G.beats(c.ev, le)).sort((a, b) => str(a) - str(b));
+    else if (G.rules.dragon && G.isDragon(V.hand)) {
+      return [{ cards: [...V.hand], ev: G.evaluate(V.hand), sig: 'dragon' }];
     } else {
-      const first = R.suggest(V.hand, null, V.mustInclude);
-      const low = Math.min(...V.hand);
+      const first = G.suggest(V.hand, null, V.mustInclude);
+      const low = G.lowestCard(V.hand);
       cands = cands.filter((c) => c.cards.includes(V.mustInclude != null ? V.mustInclude : low))
         .sort((a, b) => b.cards.length - a.cards.length || str(a) - str(b));
-      if (first) cands.unshift({ cards: first, ev: R.evaluate(first) });
+      if (first) cands.unshift({ cards: first, ev: G.evaluate(first) });
     }
     const out = [], seenKinds = new Map();
     for (const c of cands) {
@@ -636,17 +659,39 @@
   }
   const HINT_NAME = { single: 'Kartu Tinggi', pair: 'Sepasang', triple: 'Tiga Kembar' };
 
+  // Suggestions can be switched off (some players find them distracting); remembered per device.
+  let hintsOn = store.get('hints', true);
+  function renderHintToggle() {
+    const b = $('#hintToggle');
+    b.classList.toggle('off', !hintsOn);
+    b.setAttribute('aria-pressed', hintsOn ? 'true' : 'false');
+    b.title = hintsOn ? 'Saran kartu: aktif' : 'Saran kartu: mati';
+  }
+  $('#hintToggle').onclick = () => {
+    hintsOn = !hintsOn;
+    store.set('hints', hintsOn);
+    renderHintToggle();
+    toast(hintsOn ? '💡 Saran kartu aktif' : 'Saran kartu dimatikan');
+    if (V) renderActions();
+  };
+  renderHintToggle();
+
+  // The action buttons sit in their own column (never over the cards). They also ignore taps for a
+  // moment after they appear, so a finger that was already on the screen can't play or pass by accident.
+  let actionsShownAt = 0;
+  const ACTION_GUARD_MS = 450;
   function renderActions() {
     const act = $('#actions'), hints = $('#hints');
     if (!myTurn()) { act.classList.add('hidden'); hints.innerHTML = ''; return; }
+    if (act.classList.contains('hidden')) actionsShownAt = Date.now();
     act.classList.remove('hidden');
     const sel = [...selected];
-    const ev = R.evaluate(sel);
-    let ok = !!ev && (!lastEv() || R.beats(ev, lastEv()));
+    const ev = G.evaluate(sel);
+    let ok = !!ev && (!lastEv() || G.beats(ev, lastEv()));
     if (V.mustInclude != null && !sel.includes(V.mustInclude)) ok = false;
     $('#playBtn').disabled = !ok;
     $('#passBtn').disabled = !lastEv();
-    const sug = suggestions();
+    const sug = hintsOn ? suggestions() : [];
     hints.innerHTML = sug.map((s, i) => '<button class="hint' + (i === hintIdx ? ' on' : '') + '" data-h="' + i + '">' + miniHTML(s.cards) + '<span>' + (s.ev.kind === 'five' || s.ev.kind === 'dragon' ? s.ev.name : HINT_NAME[s.ev.kind]) + '</span></button>').join('');
     hints.querySelectorAll('.hint').forEach((b) => (b.onclick = () => {
       const s = sug[+b.dataset.h];
@@ -663,15 +708,16 @@
       else { selected.clear(); hintIdx = -1; }
     });
   }
-  $('#playBtn').onclick = play;
-  $('#passBtn').onclick = () => {
+  const guarded = (fn) => () => { if (Date.now() - actionsShownAt < ACTION_GUARD_MS) return; fn(); };
+  $('#playBtn').onclick = guarded(play);
+  $('#passBtn').onclick = guarded(() => {
     if (!myTurn()) return;
     socket.emit('pass', null, (res) => { if (res && res.error) toast(res.error, true); else { selected.clear(); renderHand(); } });
-  };
+  });
   $('#sortBtn').onclick = () => {
     sortMode = sortMode === 'rank' ? 'suit' : 'rank';
     store.set('sort', sortMode);
-    handOrder = R.sortHand(handOrder, sortMode);
+    handOrder = G.sortHand(handOrder, sortMode);
     saveHandOrder();
     toast(sortMode === 'rank' ? 'Urutkan: nilai' : 'Urutkan: jenis');
     renderHand();
@@ -949,7 +995,7 @@
     else if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Link meja disalin!'), () => showLink(url));
     else showLink(url);
   }
-  const showLink = (url) => ask({ title: 'Link Meja', text: 'Salin link ini dan kirim ke teman', input: url, numeric: false, ok: 'Tutup', cancel: 'Batal' });
+  const showLink = (url) => ask({ title: 'Link Meja', text: 'Salin link ini dan kirim ke teman', input: url, numeric: false, readonly: true, ok: 'Tutup', cancel: 'Batal' });
   function goHome() {
     voiceStop();
     V = null; setRoomUrl(null);
@@ -975,45 +1021,68 @@
 
   const C = (s) => s.split(' ').map((t) => { const r = R.RANKS.indexOf(t.slice(0, -1)); const su = '♦♣♥♠'.indexOf(t.slice(-1)); return r * 4 + su; });
   const combo = (name, cards, note) => '<div class="combo"><b>' + name + '</b>' + miniHTML(C(cards)) + '<small>' + note + '</small></div>';
-  $('#rules').innerHTML = '<div class="rules-box"><div class="rules-head">Aturan Capsa Banting<button id="rulesClose">✕</button></div><div class="rules-body">' +
-    '<h4>Pengaturan &amp; Tujuan</h4><p>2 - 4 pemain, masing-masing dibagikan 13 kartu. Jadilah yang pertama menghabiskan semua kartu.</p>' +
-    '<h4>Peringkat Kartu</h4><p>3 &lt; 4 &lt; 5 &lt; 6 &lt; 7 &lt; 8 &lt; 9 &lt; 10 &lt; J &lt; Q &lt; K &lt; A &lt; 2. Jika nilainya sama, bandingkan jenis: ♦ &lt; ♣ &lt; ♥ &lt; ♠. Kartu terendah 3♦, tertinggi 2♠.</p>' +
-    '<h4>Cara Bermain</h4><p>Giliran pertama: pemain dengan kartu terendah memulai dan wajib memakai kartu itu. Giliran berjalan berlawanan arah jarum jam.</p>' +
-    '<p><b>Buang</b>: kalahkan permainan sebelumnya dengan kombinasi yang sama (jumlah kartu sama) dengan nilai lebih tinggi. <b>Lewat</b>: lewati giliran; kamu tidak bisa ikut lagi sampai ronde berikutnya.</p>' +
-    '<p><b>2♠ main lagi</b>: pemain yang mengeluarkan 2♠ (tunggal, atau pair/three 2 yang berisi 2♠) langsung main lagi tanpa menunggu pemain lain lewat.</p>' +
-    '<p><b>Ronde baru</b>: saat semua pemain lain lewat, pemain terakhir yang membuang kartu memulai ronde baru dengan kombinasi apa pun. Pemenang permainan sebelumnya membuka permainan berikutnya.</p>' +
-    '<h4>Kombinasi</h4><div class="combos">' +
-    combo('Tunggal', '4♠', '1 kartu') + combo('Sepasang', '4♥ 4♠', '2 kartu nilai sama') + combo('Tiga Kembar', '9♦ 9♠ 9♥', '3 kartu nilai sama') +
-    combo('Urutan', '10♠ J♥ Q♣ K♦ A♠', '5 kartu berurutan (tanpa 2)') + combo('Flush', '3♠ 5♠ 7♠ 8♠ A♠', '5 kartu jenis sama') + combo('Full House', '4♥ 4♠ 9♦ 9♠ 9♥', 'tiga kembar + sepasang') +
-    combo('Empat Kembar', '4♥ 9♣ 9♦ 9♠ 9♥', '4 kartu sama + 1 kartu') + combo('Straight Flush', '5♥ 6♥ 7♥ 8♥ 9♥', 'urutan jenis sama (tanpa 2)') + combo('Royal Flush', '10♠ J♠ Q♠ K♠ A♠', '10-J-Q-K-A jenis sama') +
-    '</div><p>Urutan 5 kartu (rendah ke tinggi): Urutan &lt; Flush &lt; Full House &lt; Empat Kembar &lt; Straight Flush &lt; Royal Flush.</p>' +
-    '<h4>Perbandingan</h4><p>Tunggal &amp; pasangan: bandingkan nilai, lalu jenis kartu tertinggi. Tiga kembar, full house, empat kembar: bandingkan nilai kartu kembarnya. Urutan &amp; straight flush: bandingkan kartu tertinggi (nilai lalu jenis). Flush: bandingkan jenis dulu, lalu kartu tertinggi. Royal flush: bandingkan jenis.</p>' +
-    '<h4>Poin Akhir Permainan (semakin rendah semakin bagus)</h4>' +
-    '<table><tr><th>Keadaan</th><th>Poin</th></tr>' +
-    '<tr><td>Menang (kartu habis)</td><td>-10</td></tr>' +
-    '<tr><td>Menang dengan menutup kartu 2 tunggal</td><td>-20</td></tr>' +
-    '<tr><td>Menang dengan menutup pair 2</td><td>-10</td></tr>' +
-    '<tr><td>Sisa 1 - 6 kartu</td><td>+jumlah kartu ×1</td></tr>' +
-    '<tr><td>Sisa 7 - 9 kartu</td><td>+jumlah kartu ×2</td></tr>' +
-    '<tr><td>Sisa 10 - 12 kartu</td><td>+jumlah kartu ×3</td></tr>' +
-    '<tr><td>Sisa 13 kartu (full deck)</td><td>+13 ×4 = +52</td></tr>' +
-    '<tr><td>Masih memegang kartu 2 saat game selesai</td><td>+10 per kartu 2</td></tr></table>' +
-    '<h4>Bonus Paket (pengurangan tambahan)</h4>' +
-    '<table><tr><th>Paket yang dikeluarkan</th><th>Poin</th></tr>' +
-    '<tr><td>Empat Kembar (four of a kind)</td><td>-20</td></tr><tr><td>Straight Flush</td><td>-30</td></tr>' +
-    '<tr><td>Royal Flush</td><td>-50</td></tr><tr><td>Dragon (13 kartu berurutan 3 - 2 saat dibagikan)</td><td>-70</td></tr></table>' +
-    '<p>Bonus berlaku untuk siapa pun yang mengeluarkan paket, dan dijumlahkan. Contoh: menang tutup 2 (-20) dan sempat keluar empat kembar (-20) = -40.</p>' +
-    '<p>Dragon dibuang sekaligus saat membuka ronde dan langsung menang dengan -70 saja (tanpa -10). Pemain lain dihitung sisa kartunya.</p>' +
-    '<p>Contoh kalah: sisa 8 kartu termasuk dua kartu 2 = 8 ×2 + 2 ×10 = +36.</p>' +
-    '<p><b>Ceki</b>: pemain yang tinggal 1 kartu otomatis mengumumkan "CEKI!".</p>' +
-    '<p>Bermain bertiga: tetap 13 kartu per orang, 13 kartu sisanya disimpan di deck bandar dan tidak dimainkan. Aturan poin sama.</p>' +
-    '<p>Nilai = poin × pengali meja (x250, x500, x1000, x2000 atau custom).</p>' +
-    '<h4>Koneksi Terputus</h4><p>Jika koneksimu terputus, saat kembali kamu ditanya dulu apakah ingin melanjutkan permainan di meja itu. ' +
-    'Jika tidak, kartumu tidak dimainkan lagi tapi tetap dihitung poinnya. Setelah game itu selesai, pemain yang tersisa memilih lanjut tanpa kamu (kamu dikeluarkan dari meja, poinmu tetap masuk hasil akhir) atau mengakhiri permainan. ' +
-    'Pemain yang offline juga tidak menghambat: keputusan lanjut atau mengakhiri ada di tangan pemain yang masih online.</p>' +
-    '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil sebelum lanjut. Host bisa mengusulkan mengakhiri permainan, dan semua pemain yang online harus setuju. ' +
-    'Pemain diurutkan dari total poin tertinggi (#1) ke terendah (#4). Setiap pasangan dibayar: (poin pemain atas - poin pemain bawah) × pengali, dari pemain berpoin lebih tinggi ke yang lebih rendah: 1→4, 1→3, 1→2, 2→4, 2→3, 3→4.</p></div></div>';
-  const openRules = () => $('#rules').classList.remove('hidden');
+  // ---------- rules: human-readable summary of a table's rules ----------
+  const signed = (n) => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
+  const yesNo = (v) => (v ? 'Ya' : 'Tidak');
+  function rulesLabel(rules, name) {
+    if (name) return name;
+    return R.sameRules(rules, R.DEFAULT_RULES) ? 'Aturan Default' : 'Aturan Custom';
+  }
+  function rulesTableHTML(r) {
+    const suits = R.make(r).suitsAscending.join(' < ');
+    const tiers = r.tiers.map((t, i) => {
+      const from = i ? r.tiers[i - 1].upTo + 1 : 1;
+      return '<tr><td>Sisa ' + (from === t.upTo ? from : from + ' – ' + t.upTo) + ' kartu</td><td>jumlah kartu ×' + t.x + '</td></tr>';
+    }).join('');
+    return '<div class="tbl-wrap"><table class="rules-tbl"><tr><th colspan="2">Cara Main</th></tr>' +
+      '<tr><td>Waktu giliran</td><td>' + r.turnSec + ' detik</td></tr>' +
+      '<tr><td>Urutan jenis kartu</td><td>' + suits + '</td></tr>' +
+      '<tr><td>Game pertama: kartu terendah wajib dibuang</td><td>' + yesNo(r.firstLowest) + '</td></tr>' +
+      '<tr><td>Pemenang membuka game berikutnya</td><td>' + yesNo(r.winnerLeads) + '</td></tr>' +
+      '<tr><td>Sudah lewat = tidak ikut sampai ronde baru</td><td>' + yesNo(r.passLock) + '</td></tr>' +
+      '<tr><td>2♠ langsung main lagi</td><td>' + yesNo(r.twoSpadeFree) + '</td></tr>' +
+      '<tr><td>Dragon (13 kartu berurutan) menang otomatis</td><td>' + yesNo(r.dragon) + '</td></tr>' +
+      '<tr><td>Flush berisi 2 lebih tinggi dari flush tanpa 2</td><td>' + yesNo(r.flushTwoHigh) + '</td></tr>' +
+      '<tr><th colspan="2">Poin (semakin rendah semakin bagus)</th></tr>' +
+      '<tr><td>Menang (kartu habis)</td><td>' + signed(r.winPoints) + '</td></tr>' +
+      '<tr><td>Menang dengan menutup kartu 2 tunggal</td><td>' + (r.winTwoOn ? signed(r.winTwoPoints) : 'tidak dipakai') + '</td></tr>' +
+      tiers +
+      '<tr><td>Per kartu 2 yang masih dipegang</td><td>' + signed(r.twoLeftPoints) + '</td></tr>' +
+      '<tr><td>Bonus Empat Kembar</td><td>' + signed(r.bonusFour) + '</td></tr>' +
+      '<tr><td>Bonus Straight Flush</td><td>' + signed(r.bonusStraightFlush) + '</td></tr>' +
+      '<tr><td>Bonus Royal Flush</td><td>' + signed(r.bonusRoyal) + '</td></tr>' +
+      (r.dragon ? '<tr><td>Menang dengan Dragon</td><td>' + signed(r.bonusDragon) + ' (tanpa poin menang)</td></tr>' : '') +
+      '</table></div>';
+  }
+  function rulesGuideHTML(r, title) {
+    const suits = R.make(r).suitsAscending.join(' < ');
+    return '<div class="rules-box"><div class="rules-head">' + esc(title) + '<button id="rulesClose" aria-label="Tutup">✕</button></div><div class="rules-body">' +
+      '<h4>Aturan yang berlaku</h4>' + rulesTableHTML(r) +
+      '<h4>Tujuan</h4><p>2 - 4 pemain, masing-masing dibagikan 13 kartu. Jadilah yang pertama menghabiskan semua kartu. Bermain bertiga: 13 kartu sisanya disimpan di deck bandar.</p>' +
+      '<h4>Peringkat Kartu</h4><p>3 &lt; 4 &lt; 5 &lt; 6 &lt; 7 &lt; 8 &lt; 9 &lt; 10 &lt; J &lt; Q &lt; K &lt; A &lt; 2. Jika nilainya sama, bandingkan jenis: ' + suits + '.</p>' +
+      '<h4>Cara Bermain</h4><p>Giliran berjalan berlawanan arah jarum jam. <b>Buang</b>: kalahkan kombinasi sebelumnya dengan jumlah kartu yang sama dan nilai lebih tinggi. <b>Lewat</b>: lewati giliran. ' +
+      (r.passLock ? 'Setelah lewat kamu tidak ikut lagi sampai ronde berikutnya.' : 'Kamu boleh ikut lagi setelah ada pemain lain yang membuang kartu.') + '</p>' +
+      '<p><b>Ronde baru</b>: saat semua pemain lain lewat, pemain terakhir yang membuang kartu membuka ronde baru dengan kombinasi apa pun.' + (r.twoSpadeFree ? ' Pemain yang mengeluarkan 2♠ (tunggal, atau pair/three 2 berisi 2♠) langsung main lagi.' : '') + '</p>' +
+      '<h4>Kombinasi</h4><div class="combos">' +
+      combo('Tunggal', '4♠', '1 kartu') + combo('Sepasang', '4♥ 4♠', '2 kartu nilai sama') + combo('Tiga Kembar', '9♦ 9♠ 9♥', '3 kartu nilai sama') +
+      combo('Urutan', '10♠ J♥ Q♣ K♦ A♠', '5 kartu berurutan (tanpa 2)') + combo('Flush', '3♠ 5♠ 7♠ 8♠ A♠', '5 kartu jenis sama') + combo('Full House', '4♥ 4♠ 9♦ 9♠ 9♥', 'tiga kembar + sepasang') +
+      combo('Empat Kembar', '4♥ 9♣ 9♦ 9♠ 9♥', '4 kartu sama + 1 kartu') + combo('Straight Flush', '5♥ 6♥ 7♥ 8♥ 9♥', 'urutan jenis sama (tanpa 2)') + combo('Royal Flush', '10♠ J♠ Q♠ K♠ A♠', '10-J-Q-K-A jenis sama') +
+      '</div><p>Urutan 5 kartu (rendah ke tinggi): Urutan &lt; Flush &lt; Full House &lt; Empat Kembar &lt; Straight Flush &lt; Royal Flush.</p>' +
+      '<h4>Perbandingan</h4><p>Tunggal &amp; pasangan: nilai, lalu jenis kartu tertinggi. Tiga kembar, full house, empat kembar: nilai kartu kembarnya. Urutan &amp; straight flush: kartu tertinggi (nilai lalu jenis). Flush: jenis dulu, lalu kartu tertinggi' +
+      (r.flushTwoHigh ? ' — dengan aturan meja ini, flush yang berisi kartu 2 selalu lebih tinggi dari flush tanpa 2' : '') + '. Royal flush: bandingkan jenis.</p>' +
+      '<h4>Lainnya</h4><p>Bonus paket berlaku untuk siapa pun yang mengeluarkannya dan dijumlahkan. <b>Ceki</b>: pemain yang tinggal 1 kartu otomatis mengumumkan "CEKI!". Nilai = poin × pengali meja.</p>' +
+      '<p>Koneksi terputus: saat kembali kamu ditanya apakah ingin melanjutkan. Permainan tersimpan walaupun server sempat mati.</p>' +
+      '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil. Host bisa mengusulkan mengakhiri permainan, dan semua pemain online harus setuju. ' +
+      'Pemain diurutkan dari total poin tertinggi (#1) ke terendah. Setiap pasangan dibayar: (poin pemain atas − poin pemain bawah) × pengali.</p>' +
+      '<p class="muted">Aturan meja hanya bisa diatur oleh pembuat meja, sebelum permainan dimulai.</p></div></div>';
+  }
+  function openRules() {
+    const inTable = V && !$('#table').classList.contains('hidden');
+    const r = inTable ? V.rules : rulesChoice().rules;
+    const title = inTable ? 'Aturan Meja · ' + rulesLabel(V.rules, V.rulesName) : 'Aturan Main · ' + rulesChoice().name;
+    $('#rules').innerHTML = rulesGuideHTML(r, title);
+    $('#rules').classList.remove('hidden');
+  }
   $('#rulesBtn').onclick = openRules; $('#rulesBtnHome').onclick = openRules;
   $('#rules').addEventListener('click', (e) => { if (e.target.id === 'rulesClose' || e.target.id === 'rules') $('#rules').classList.add('hidden'); });
 
@@ -1306,6 +1375,211 @@
       if (f) { f.unread = (f.unread || 0) + 1; renderFriendBadges(); if (!$('#friends').classList.contains('hidden')) renderFriends(); }
       toast('💬 ' + m.from.name + ': ' + m.body.slice(0, 60));
       sfx.tick();
+    }
+  });
+
+  // ---------- player profile (tap a player at the table) ----------
+  async function openProfile(seat) {
+    const p = V.seats[seat];
+    const el = $('#profile');
+    const head = '<div class="prof-head"><div class="avatar prof-av">' + esc(p.avatar) + '</div><div><div class="prof-name">' + esc(p.name) + '</div><div class="prof-sub" id="profSub">' + (p.bot ? 'Bot komputer' : 'Memuat…') + '</div></div></div>' +
+      '<div class="prof-table">Di meja ini: <b>' + pts(p.score || 0) + ' poin</b> · ' + (p.wins || 0) + ' menang dari ' + (p.games || 0) + ' game</div>';
+    el.innerHTML = '<div class="dialog prof-box"><button class="x prof-x" aria-label="Tutup">✕</button>' + head + '<div id="profBody">' + (p.bot ? '<p class="muted">Bot tidak punya akun.</p>' : '') + '</div></div>';
+    el.classList.remove('hidden');
+    if (p.bot || !p.userId) return;
+    try {
+      const d = await api('/users/' + p.userId);
+      if (el.classList.contains('hidden')) return;
+      const s = d.stats || {};
+      $('#profSub').textContent = '@' + d.user.username + (d.presence ? (d.presence.online ? ' · online' : ' · offline') : '');
+      const acts = {
+        self: '<span class="prof-tag">Ini kamu</span>',
+        none: '<button class="btn green" data-pact="add">➕ Tambah Teman</button>',
+        outgoing: '<span class="prof-tag">⏳ Permintaan terkirim</span><button class="btn ghost small dark" data-pact="cancel">Batalkan</button>',
+        incoming: '<button class="btn green" data-pact="accept">✓ Terima Pertemanan</button><button class="btn ghost small dark" data-pact="cancel">Tolak</button>',
+        friends: '<span class="prof-tag good">✓ Teman</span><button class="btn blue" data-pact="chat">💬 Chat</button>',
+      }[d.relation];
+      $('#profBody').innerHTML = '<div class="me-stats wide prof-stats">' + statsHTML(s) + '</div><div class="prof-acts">' + acts + '</div>';
+      $('#profBody').onclick = async (e) => {
+        const b = e.target.closest('[data-pact]'); if (!b) return;
+        try {
+          if (b.dataset.pact === 'add') toast((await api('/friends', { method: 'POST', body: { username: d.user.username } })).message);
+          else if (b.dataset.pact === 'accept') { await api('/friends/' + d.user.id + '/accept', { method: 'POST' }); toast('Kamu sekarang berteman dengan ' + d.user.name); }
+          else if (b.dataset.pact === 'cancel') await api('/friends/' + d.user.id, { method: 'DELETE' });
+          else if (b.dataset.pact === 'chat') { el.classList.add('hidden'); await refreshFriends(); openDm(d.user.id); return; }
+          refreshFriends();
+          openProfile(seat);
+        } catch (err) { toast(err.message, true); }
+      };
+    } catch (err) { $('#profBody').innerHTML = '<p class="muted">' + esc(err.message) + '</p>'; }
+  }
+  $('#profile').addEventListener('click', (e) => { if (e.target.id === 'profile' || e.target.closest('.prof-x')) $('#profile').classList.add('hidden'); });
+
+  // ---------- table rules: choice for new tables, editor, presets ----------
+  // The rules used for the next table you create: Aturan Default or one of your saved presets (remembered on this device).
+  function rulesChoice() {
+    const c = store.get('rulesChoice', null);
+    if (c && c.rules) return { name: c.name || 'Aturan Custom', rules: R.normalizeRules(c.rules) };
+    return { name: 'Aturan Default', rules: R.normalizeRules(R.DEFAULT_RULES) };
+  }
+  function setRulesChoice(name, rules) {
+    if (!name || name === 'Aturan Default') store.set('rulesChoice', null);
+    else store.set('rulesChoice', { name, rules });
+    renderRulesChoice();
+  }
+  function renderRulesChoice() { $('#rulesChoiceName').textContent = rulesChoice().name; }
+  $('#rulesChoiceBtn').onclick = () => { if (needLogin()) return; const c = rulesChoice(); openRulesEditor({ mode: 'create', rules: c.rules, name: c.name }); };
+  renderRulesChoice();
+
+  let presets = [];
+  async function loadPresets() {
+    if (!me.user) return [];
+    try { presets = (await api('/presets')).presets; } catch {}
+    return presets;
+  }
+  const RULE_TOGGLES = [
+    ['firstLowest', 'Game pertama: kartu terendah wajib dibuang'],
+    ['winnerLeads', 'Pemenang membuka game berikutnya'],
+    ['passLock', 'Sudah lewat = tidak ikut sampai ronde baru'],
+    ['twoSpadeFree', '2♠ langsung main lagi'],
+    ['dragon', 'Dragon (13 kartu berurutan) menang otomatis'],
+    ['flushTwoHigh', 'Flush berisi kartu 2 lebih tinggi dari flush tanpa 2'],
+    ['winTwoOn', 'Menang dengan menutup kartu 2 tunggal dapat poin khusus'],
+  ];
+  const RULE_NEG = [
+    ['winPoints', 'Poin menang'], ['winTwoPoints', 'Menang tutup 2 tunggal'], ['bonusFour', 'Bonus Empat Kembar'],
+    ['bonusStraightFlush', 'Bonus Straight Flush'], ['bonusRoyal', 'Bonus Royal Flush'], ['bonusDragon', 'Menang dengan Dragon'],
+  ];
+  let editor = null; // { mode, name }
+  function tiersHTML(tiers) {
+    return tiers.map((t, i) => {
+      const from = i ? tiers[i - 1].upTo + 1 : 1;
+      const last = i === tiers.length - 1;
+      return '<div class="re-tier">Sisa <b>' + from + '</b> – ' + (last ? '<b>13</b>' : '<input data-tier-up="' + i + '" inputmode="numeric" value="' + t.upTo + '">') +
+        ' kartu → ×<input data-tier-x="' + i + '" inputmode="numeric" value="' + t.x + '">' +
+        (tiers.length > 1 ? '<button type="button" class="re-del" data-tier-del="' + i + '" aria-label="Hapus tingkat">✕</button>' : '') + '</div>';
+    }).join('');
+  }
+  function editorBodyHTML(r) {
+    const turnOpts = [10, 15, 20, 30, 45, 60, 90].map((n) => '<option value="' + n + '"' + (n === r.turnSec ? ' selected' : '') + '>' + n + ' detik</option>').join('');
+    return '<div class="re-grid"><section><h4>Cara Main</h4>' +
+      '<label class="re-field"><span>Waktu giliran</span><select data-k="turnSec">' + turnOpts + '</select></label>' +
+      '<label class="re-field"><span>Urutan jenis kartu</span><select data-k="suitOrder"><option value="DCHS"' + (r.suitOrder === 'DCHS' ? ' selected' : '') + '>♦ < ♣ < ♥ < ♠</option><option value="CDHS"' + (r.suitOrder === 'CDHS' ? ' selected' : '') + '>♣ < ♦ < ♥ < ♠</option></select></label>' +
+      RULE_TOGGLES.map(([k, t]) => '<label class="re-toggle"><input type="checkbox" data-k="' + k + '"' + (r[k] ? ' checked' : '') + '><span class="sw"></span><span>' + t + '</span></label>').join('') +
+      '</section><section><h4>Poin <small>(semakin rendah semakin bagus)</small></h4>' +
+      RULE_NEG.map(([k, t]) => '<label class="re-field"><span>' + t + '</span><b class="sign">−</b><input data-neg="' + k + '" inputmode="numeric" value="' + Math.abs(r[k]) + '"></label>').join('') +
+      '<div class="re-sub">Sisa kartu yang kalah (poin = jumlah kartu × pengali)</div><div id="reTiers">' + tiersHTML(r.tiers) + '</div>' +
+      (r.tiers.length < 6 ? '<button type="button" class="btn ghost small dark" id="reAddTier">+ Tambah tingkat</button>' : '') +
+      '<label class="re-field"><span>Per kartu 2 yang masih dipegang</span><b class="sign">+</b><input data-pos="twoLeftPoints" inputmode="numeric" value="' + Math.abs(r.twoLeftPoints) + '"></label>' +
+      '</section></div>';
+  }
+  function readEditor() {
+    const box = $('#rulesEdit');
+    const r = {};
+    box.querySelectorAll('select[data-k]').forEach((x) => (r[x.dataset.k] = x.dataset.k === 'turnSec' ? +x.value : x.value));
+    box.querySelectorAll('input[type=checkbox][data-k]').forEach((x) => (r[x.dataset.k] = x.checked));
+    const n = (x) => Math.abs(parseInt(String(x.value).replace(/[^0-9]/g, ''), 10) || 0);
+    box.querySelectorAll('input[data-neg]').forEach((x) => (r[x.dataset.neg] = -n(x)));
+    box.querySelectorAll('input[data-pos]').forEach((x) => (r[x.dataset.pos] = n(x)));
+    const ups = [...box.querySelectorAll('input[data-tier-up]')].map((x) => n(x));
+    const xs = [...box.querySelectorAll('input[data-tier-x]')].map((x) => n(x));
+    r.tiers = xs.map((x, i) => ({ upTo: i < ups.length ? ups[i] : 13, x }));
+    return R.normalizeRules(r);
+  }
+  function fillEditor(rules) {
+    $('#reBody').innerHTML = editorBodyHTML(R.normalizeRules(rules));
+  }
+  function presetOptions(selectedName) {
+    return '<option value="default"' + (!selectedName || selectedName === 'Aturan Default' ? ' selected' : '') + '>Aturan Default</option>' +
+      presets.map((p) => '<option value="' + p.id + '"' + (p.name === selectedName ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('') +
+      (selectedName && selectedName !== 'Aturan Default' && !presets.some((p) => p.name === selectedName) ? '<option value="custom" selected>' + esc(selectedName) + '</option>' : '');
+  }
+  async function openRulesEditor({ mode, rules, name }) {
+    editor = { mode, name: name || rulesLabel(rules) };
+    const el = $('#rulesEdit');
+    el.innerHTML = '<div class="rules-box re-box"><div class="rules-head">⚙️ ' + (mode === 'table' ? 'Aturan Meja Ini' : 'Aturan untuk Meja Baru') + '<button class="x" aria-label="Tutup">✕</button></div>' +
+      '<div class="re-top"><label>Preset</label><select id="rePreset"></select><button type="button" class="btn ghost small dark" id="reDelPreset">Hapus preset</button></div>' +
+      '<div class="rules-body" id="reBody"></div>' +
+      '<div class="re-foot"><button type="button" class="btn ghost small dark" id="reDefault">↺ Aturan Default</button>' +
+      '<button type="button" class="btn blue small" id="reSave">💾 Simpan sebagai preset</button>' +
+      '<button type="button" class="btn green" id="reApply">' + (mode === 'table' ? 'Terapkan ke meja' : 'Pakai untuk meja baru') + '</button></div></div>';
+    el.classList.remove('hidden');
+    fillEditor(rules);
+    await loadPresets();
+    $('#rePreset').innerHTML = presetOptions(editor.name);
+    syncPresetButtons();
+  }
+  function syncPresetButtons() {
+    const v = $('#rePreset').value;
+    $('#reDelPreset').classList.toggle('hidden', !(v && v !== 'default' && v !== 'custom'));
+  }
+  $('#rulesEdit').addEventListener('change', (e) => {
+    if (e.target.id === 'rePreset') {
+      const v = e.target.value;
+      if (v === 'default') { editor.name = 'Aturan Default'; fillEditor(R.DEFAULT_RULES); }
+      else { const p = presets.find((x) => String(x.id) === v); if (p) { editor.name = p.name; fillEditor(p.rules); } }
+      syncPresetButtons();
+      return;
+    }
+    if (e.target.matches('[data-tier-up],[data-tier-x]')) $('#reTiers').innerHTML = tiersHTML(readEditor().tiers);
+    // any manual change makes it an unsaved custom version
+    if (e.target.closest('#reBody') && editor.name === 'Aturan Default' && !R.sameRules(readEditor(), R.DEFAULT_RULES)) editor.name = 'Aturan Custom';
+  });
+  $('#rulesEdit').addEventListener('click', async (e) => {
+    const el = $('#rulesEdit');
+    if (e.target.id === 'rulesEdit' || e.target.closest('.rules-head .x')) return el.classList.add('hidden');
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.id === 'reAddTier') {
+      const r = readEditor();
+      const last = r.tiers[r.tiers.length - 1];
+      const prevUp = r.tiers.length > 1 ? r.tiers[r.tiers.length - 2].upTo : 0;
+      if (prevUp >= 12) return toast('Tidak bisa menambah tingkat lagi', true);
+      r.tiers.splice(r.tiers.length - 1, 0, { upTo: Math.min(12, prevUp + 1), x: last.x });
+      return fillEditor(r);
+    }
+    if (t.dataset.tierDel != null) {
+      const r = readEditor();
+      r.tiers.splice(+t.dataset.tierDel, 1);
+      return fillEditor(r);
+    }
+    if (t.id === 'reDefault') { editor.name = 'Aturan Default'; fillEditor(R.DEFAULT_RULES); $('#rePreset').value = 'default'; syncPresetButtons(); return; }
+    if (t.id === 'reDelPreset') {
+      const p = presets.find((x) => String(x.id) === $('#rePreset').value); if (!p) return;
+      if (!(await ask({ title: 'Hapus preset?', text: 'Hapus aturan "' + p.name + '"?', ok: 'Hapus' }))) return;
+      try { await api('/presets/' + p.id, { method: 'DELETE' }); } catch (err) { return toast(err.message, true); }
+      if (rulesChoice().name === p.name) setRulesChoice(null);
+      await loadPresets();
+      editor.name = 'Aturan Default';
+      $('#rePreset').innerHTML = presetOptions(editor.name);
+      fillEditor(R.DEFAULT_RULES); syncPresetButtons();
+      return toast('Preset dihapus');
+    }
+    if (t.id === 'reSave') {
+      const suggested = editor.name && !/^Aturan (Default|Custom)$/.test(editor.name) ? editor.name : '';
+      const name = await ask({ title: 'Simpan aturan', text: 'Beri nama aturan ini (mis. "Geng Kantor")', input: suggested, numeric: false, ok: 'Simpan' });
+      if (!name || !name.trim()) return;
+      try {
+        const saved = (await api('/presets', { method: 'POST', body: { name: name.trim(), rules: readEditor() } })).preset;
+        editor.name = saved.name;
+        await loadPresets();
+        $('#rePreset').innerHTML = presetOptions(editor.name); syncPresetButtons();
+        toast('💾 Aturan "' + saved.name + '" disimpan');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    if (t.id === 'reApply') {
+      const rules = readEditor();
+      const name = R.sameRules(rules, R.DEFAULT_RULES) ? 'Aturan Default' : editor.name === 'Aturan Default' ? 'Aturan Custom' : editor.name;
+      if (editor.mode === 'table') {
+        socket.emit('setRules', { rules, rulesName: name === 'Aturan Default' ? null : name }, (res) => {
+          if (res && res.error) return toast(res.error, true);
+          el.classList.add('hidden');
+        });
+      } else {
+        setRulesChoice(name, rules);
+        el.classList.add('hidden');
+        toast('Meja baru akan memakai: ' + name);
+      }
     }
   });
 

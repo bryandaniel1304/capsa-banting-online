@@ -8,7 +8,8 @@ const store = require('./store');
 const accounts = require('./auth');
 
 const PORT = process.env.PORT || 3000;
-const TURN_MS = 20000;
+const cleanRulesName = (n) => String(n || '').replace(/[<>]/g, '').trim().slice(0, 30) || null;
+const turnMs = (room) => room.rules.turnSec * 1000; // per-table rules (shared/rules.js DEFAULT_RULES)
 const RECONNECT_GRACE_MS = 90000; // after a server restart, give players time to come back before auto-playing
 const AWAY_AUTO_MS = 60000; // a player away longer than this gets auto-played quickly
 const MULTS = [250, 500, 1000, 2000];
@@ -70,9 +71,10 @@ const activeHumans = (room) => room.seats.filter((p) => p && !p.bot && !isAway(p
 const awaySeats = (room) => occupied(room).filter((s) => isAway(room.seats[s]));
 const hostAway = (room) => isAway(room.seats[seatOf(room, room.hostToken)]) || seatOf(room, room.hostToken) < 0;
 
-function createRoom(mult) {
+function createRoom(mult, rules) {
+  const normalized = R.normalizeRules(rules);
   const room = {
-    code: makeCode(), mult: validMult(mult) ? mult : MULTS[0],
+    code: makeCode(), mult: validMult(mult) ? mult : MULTS[0], rules: normalized, rc: R.make(normalized), creatorToken: null,
     hostToken: null, seats: [null, null, null, null], state: 'lobby',
     game: null, result: null, lastWinner: null, gameNo: 0, timer: null, botTimer: null, created: Date.now(),
     history: [], endVote: null, final: null, departed: [],
@@ -130,7 +132,8 @@ function liveTask(room, fn) {
 }
 function serializeRoom(room) {
   return JSON.stringify({
-    v: 1, code: room.code, mult: room.mult, hostToken: room.hostToken, state: room.state, gameNo: room.gameNo,
+    v: 1, code: room.code, mult: room.mult, hostToken: room.hostToken, creatorToken: room.creatorToken, rules: room.rules, rulesName: room.rulesName || null,
+    state: room.state, gameNo: room.gameNo,
     lastWinner: room.lastWinner, created: room.created, history: room.history, result: room.result, final: room.final,
     endVote: room.endVote, matchId: room.match.id, game: room.game, departed: room.departed,
     seats: room.seats.map((p) => p && {
@@ -147,13 +150,15 @@ function saveRoomSoon(room) {
     let json;
     try { json = serializeRoom(room); } catch (e) { return console.error('serialize', room.code, e.message); }
     liveTask(room, () => store.saveLiveRoom(room.code, json));
-  }, 300));
+  }, 150));
 }
 function restoreRoom(d) {
   if (rooms.has(d.code)) return rooms.get(d.code);
   const now = Date.now();
+  const rules = R.normalizeRules(d.rules);
   const room = {
-    code: d.code, mult: d.mult, hostToken: d.hostToken, seats: [null, null, null, null], state: d.state,
+    code: d.code, mult: d.mult, hostToken: d.hostToken, creatorToken: d.creatorToken || d.hostToken, rules, rc: R.make(rules), rulesName: d.rulesName || null,
+    seats: [null, null, null, null], state: d.state,
     game: d.game, result: d.result, lastWinner: d.lastWinner, gameNo: d.gameNo || 0, timer: null, botTimer: null,
     created: d.created || now, lastActive: now, graceUntil: now + RECONNECT_GRACE_MS,
     history: d.history || [], endVote: d.endVote || null, final: d.final || null, departed: d.departed || [],
@@ -167,7 +172,7 @@ function restoreRoom(d) {
   });
   rooms.set(room.code, room);
   if (room.state === 'playing' && room.game) {
-    room.game.deadline = Math.max(now + TURN_MS, room.graceUntil);
+    room.game.deadline = Math.max(now + turnMs(room), room.graceUntil);
     armTurn(room);
   }
   console.log('restored table', room.code, room.state, 'game', room.gameNo);
@@ -188,18 +193,20 @@ function startGame(room) {
   if (seats.length < 2) return 'Butuh minimal 2 pemain';
   clearTimeout(room.timer);
   // 13 cards each; with fewer than 4 players the rest stays in the dealer's deck unplayed
+  const rc = room.rc;
   const deck = R.shuffle(R.newDeck());
   const hands = {};
-  seats.forEach((s, i) => (hands[s] = R.sortHand(deck.slice(i * 13, i * 13 + 13))));
+  seats.forEach((s, i) => (hands[s] = rc.sortHand(deck.slice(i * 13, i * 13 + 13))));
   seats.forEach((s) => (room.seats[s].ready = false));
 
-  // First game: holder of the lowest dealt card leads and must play it. Afterwards the last winner leads.
+  // The previous winner opens (if the table's rules say so); otherwise the holder of the lowest card leads,
+  // and on the first game may have to play that card.
   let leader, mustInclude = null;
-  if (room.lastWinner != null && room.seats[room.lastWinner]) leader = room.lastWinner;
+  if (room.rules.winnerLeads && room.lastWinner != null && room.seats[room.lastWinner]) leader = room.lastWinner;
   else {
-    const lowest = Math.min(...seats.flatMap((s) => hands[s]));
+    const lowest = rc.lowestCard(seats.flatMap((s) => hands[s]));
     leader = seats.find((s) => hands[s].includes(lowest));
-    mustInclude = lowest;
+    if (room.rules.firstLowest && (room.lastWinner == null || !room.rules.winnerLeads)) mustInclude = lowest;
   }
 
   room.gameNo++;
@@ -220,7 +227,7 @@ function startGame(room) {
 function startTurn(room) {
   const g = room.game;
   const now = Date.now();
-  g.deadline = now + TURN_MS;
+  g.deadline = now + turnMs(room);
   const p = room.seats[g.turn];
   // right after a restart, a player who hasn't reconnected yet keeps their turn until the grace period ends
   if (p && !p.bot && !p.connected && room.graceUntil > now) g.deadline = Math.max(g.deadline, room.graceUntil);
@@ -247,24 +254,26 @@ function doPlay(room, seat, cards) {
   if (!Array.isArray(cards) || !cards.length) return 'Pilih kartu';
   const hand = g.hands[seat];
   if (!cards.every((c) => hand.includes(c))) return 'Kartu tidak valid';
-  const ev = R.evaluate(cards);
+  const rc = room.rc;
+  const ev = rc.evaluate(cards);
   if (!ev) return 'Kombinasi tidak valid';
   const leading = !g.lastPlay || g.free;
   if (ev.kind === 'dragon' && !leading) return 'Dragon hanya bisa dibuang saat membuka ronde';
   if (g.mustInclude != null && !cards.includes(g.mustInclude)) return 'Giliran pertama harus memakai ' + R.label(g.mustInclude);
-  if (!leading && !R.beats(ev, g.lastPlay.ev)) {
+  if (!leading && !rc.beats(ev, g.lastPlay.ev)) {
     return g.lastPlay.ev.count !== ev.count ? 'Harus ' + g.lastPlay.ev.count + ' kartu' : 'Kartu kurang tinggi';
   }
   g.hands[seat] = hand.filter((c) => !cards.includes(c));
   g.mustInclude = null;
   g.free = false;
   if (leading) { g.passed = []; g.history = []; }
-  g.lastPlay = { seat, cards: [...cards].sort((a, b) => a - b), ev };
+  else if (!room.rules.passLock) g.passed = []; // passing only skips until someone plays again
+  g.lastPlay = { seat, cards: rc.sortHand(cards), ev };
   g.history.push({ seat, cards: g.lastPlay.cards, name: ev.name });
   if (g.history.length > 4) g.history.shift();
   io.to(room.code).emit('fx', { type: 'play', seat, cards: g.lastPlay.cards, name: ev.name, kind: ev.kind });
 
-  const bonus = R.bonusFor(ev);
+  const bonus = rc.bonusFor(ev);
   if (bonus) {
     g.bonus[seat].push({ label: ev.name, points: bonus });
     io.to(room.code).emit('fx', { type: 'bonus', seat, name: ev.name, points: bonus });
@@ -274,7 +283,7 @@ function doPlay(room, seat, cards) {
     g.ceki.push(seat);
     io.to(room.code).emit('fx', { type: 'ceki', seat });
   }
-  if (R.freeTurnAfter(ev, cards)) {
+  if (rc.freeTurnAfter(ev, cards)) {
     // 2♠ can't be beaten: the same player plays again right away
     g.free = true; g.passed = [];
     io.to(room.code).emit('fx', { type: 'twoSpade', seat });
@@ -362,12 +371,13 @@ function endGame(room, winner, finalEv, finalCards) {
     const left = (g.hands[s] || []).length;
     const items = [];
     if (s === winner) {
-      const wp = R.winPoints(finalEv, finalCards);
-      if (wp) items.push({ label: wp === R.WIN_WITH_TWO_POINTS ? 'Menang tutup 2' : 'Menang', points: wp });
+      const wp = room.rc.winPoints(finalEv, finalCards);
+      const closedWithTwo = room.rules.winTwoOn && finalEv.kind === 'single' && R.rankOf(finalCards[0]) === R.RANK_TWO;
+      if (wp) items.push({ label: closedWithTwo ? 'Menang tutup 2' : 'Menang', points: wp });
     } else {
-      items.push({ label: 'Sisa ' + left + ' kartu ×' + R.penaltyPerCard(left), points: R.penaltyPoints(left) });
+      items.push({ label: 'Sisa ' + left + ' kartu ×' + room.rc.penaltyPerCard(left), points: room.rc.penaltyPoints(left) });
       const twos = R.twosLeft(g.hands[s] || []);
-      if (twos) items.push({ label: 'Sisa ' + twos + ' kartu 2', points: twos * R.TWO_LEFT_POINTS });
+      if (twos && room.rules.twoLeftPoints) items.push({ label: 'Sisa ' + twos + ' kartu 2', points: twos * room.rules.twoLeftPoints });
     }
     items.push(...g.bonus[s]);
     const points = items.reduce((a, b) => a + b.points, 0);
@@ -433,7 +443,7 @@ function autoAct(room) {
   const g = room.game;
   if (!g || room.state !== 'playing') return;
   const seat = g.turn;
-  if (!g.lastPlay || g.free) doPlay(room, seat, [g.mustInclude != null ? g.mustInclude : Math.min(...g.hands[seat])]);
+  if (!g.lastPlay || g.free) doPlay(room, seat, [g.mustInclude != null ? g.mustInclude : room.rc.lowestCard(g.hands[seat])]);
   else doPass(room, seat);
 }
 
@@ -443,7 +453,7 @@ function botAct(room) {
   const seat = g.turn;
   const hand = g.hands[seat];
   const toBeat = g.lastPlay && !g.free ? g.lastPlay.ev : null;
-  let pick = R.suggest(hand, toBeat, g.mustInclude);
+  let pick = room.rc.suggest(hand, toBeat, g.mustInclude);
   if (pick && toBeat) {
     // hold back 2s early unless an opponent is close to going out
     const danger = occupied(room).some((s) => s !== seat && g.hands[s] && g.hands[s].length <= 3);
@@ -545,7 +555,11 @@ function viewFor(room, token) {
     dealerLeft: playing ? g.dealerLeft : 0,
     turn: playing ? g.turn : -1,
     remaining: playing ? Math.max(0, g.deadline - Date.now()) : 0,
-    turnMs: TURN_MS,
+    turnMs: turnMs(room),
+    rules: room.rules,
+    rulesName: room.rulesName || null,
+    creator: seatOf(room, room.creatorToken),
+    canEditRules: !!token && token === room.creatorToken && room.state === 'lobby',
     lastPlay: playing && g.lastPlay ? { seat: g.lastPlay.seat, cards: g.lastPlay.cards, name: g.lastPlay.ev.name } : null,
     history: playing ? g.history : [],
     mustInclude: playing ? g.mustInclude : null,
@@ -715,11 +729,13 @@ io.on('connection', (socket) => {
     ack(cb, {});
   });
 
-  socket.on('create', ({ mult } = {}, cb) => {
+  socket.on('create', ({ mult, rules, rulesName } = {}, cb) => {
     if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
     const old = roomOf();
     if (old) leave(old);
-    const room = createRoom(+mult);
+    const room = createRoom(+mult, rules);
+    room.rulesName = cleanRulesName(rulesName);
+    room.creatorToken = token; // only the creator may change this table's rules
     const p = newPlayer();
     seatPlayer(room, p, 0);
     attach(room, p);
@@ -796,6 +812,20 @@ io.on('connection', (socket) => {
     if (!p.bot && p.socketId) io.to(p.socketId).emit('kicked');
     removePlayer(room, seat);
     if (rooms.has(room.code)) broadcast(room);
+  });
+
+  // Table rules: only the player who created the table, and only before a game is played.
+  socket.on('setRules', ({ rules, rulesName } = {}, cb) => {
+    const room = roomOf();
+    if (!room) return ack(cb, { error: 'Tidak di meja' });
+    if (room.creatorToken !== token) return ack(cb, { error: 'Hanya pembuat meja yang bisa mengubah aturan' });
+    if (room.state !== 'lobby') return ack(cb, { error: 'Aturan hanya bisa diubah sebelum permainan dimulai' });
+    room.rules = R.normalizeRules(rules);
+    room.rc = R.make(room.rules);
+    room.rulesName = cleanRulesName(rulesName);
+    io.to(room.code).emit('toast', { msg: '📋 Aturan meja diperbarui' });
+    broadcast(room);
+    ack(cb, { ok: true, rules: room.rules });
   });
 
   socket.on('mult', ({ mult } = {}) => {

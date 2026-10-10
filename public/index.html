@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#2a1840">
+<meta name="theme-color" content="#07110d">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,7 +11,8 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>Capsa Banting Online</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Montserrat:wght@500;600;700;800&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -22,7 +23,7 @@
     <div class="home-bg"></div>
     <div class="home-wrap">
       <div class="home-left">
-        <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">ONLINE</span></div>
+        <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">— ONLINE —</span></div>
         <form id="authBox" class="auth-box" autocomplete="on" onsubmit="return false">
           <div class="auth-tabs"><button type="button" data-tab="login" class="on">Masuk</button><button type="button" data-tab="signup">Daftar</button></div>
           <input id="authUser" name="username" placeholder="Username" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="20">
@@ -47,12 +48,14 @@
             <button id="friendsBtn" class="btn orange small">👥 Teman <span class="badge hidden"></span></button>
           </div>
         </div>
-        <button id="rulesBtnHome" class="btn ghost small">❓ Aturan Main</button>
+        <button id="rulesBtnHome" class="btn ghost small">📋 Aturan &amp; Cara Main</button>
       </div>
       <div class="home-right">
-        <div class="tiers-title">Buat Meja Baru · pilih pengali</div>
+        <div class="tiers-title">Buat Meja Baru</div>
+        <div class="tiers-sub">Pilih pengali · nilai = poin × pengali</div>
         <div id="tiers" class="tiers"></div>
-        <div class="home-note">Tanpa koin: setiap game dihitung poin (semakin rendah semakin bagus). Nilai = poin × pengali. Ajak teman dengan kode / link meja.</div>
+        <button id="rulesChoiceBtn" class="rules-choice" type="button"><span class="rc-lbl">Aturan meja</span><span id="rulesChoiceName" class="rc-name">Aturan Default</span><span class="rc-edit">⚙️ Atur</span></button>
+        <div class="home-note">Tanpa koin — setiap game dihitung poin, semakin rendah semakin bagus. Ajak teman dengan kode atau link meja.</div>
       </div>
     </div>
   </section>
@@ -60,11 +63,17 @@
   <!-- TABLE -->
   <section id="table" class="screen hidden">
     <div class="room-bg"></div>
-    <div class="board"><div class="suit-order">♠ &gt; ♥ &gt; ♣ &gt; ♦</div><div class="suit-order b">♠ &gt; ♥ &gt; ♣ &gt; ♦</div><div class="watermark">CAPSA</div></div>
+    <div class="board">
+      <div class="felt">
+        <div class="felt-line"></div>
+        <div class="watermark"><span>CAPSA</span><small>BANTING</small></div>
+        <div class="suit-order"></div>
+      </div>
+    </div>
 
     <div class="topbar">
       <button id="menuBtn" class="round-btn" aria-label="Menu">☰</button>
-      <button id="rulesBtn" class="round-btn" aria-label="Aturan">?</button>
+      <button id="rulesBtn" class="round-btn" aria-label="Aturan meja">📋</button>
       <div class="room-info">
         <div><span class="lbl">MEJA</span> <b id="roomCode">-----</b></div>
         <div><span class="lbl">PENGALI</span> <b id="stakeLbl">x250</b></div>
@@ -92,15 +101,18 @@
 
     <div id="hand" class="hand"></div>
 
-    <div id="actions" class="actions hidden">
-      <button id="passBtn" class="btn orange act">✋ Lewat</button>
-      <div class="clock"><span id="clockNum">20</span></div>
-      <button id="playBtn" class="btn green act">🂠 Buang</button>
+    <!-- right column: tools on top, actions below (never over the cards) -->
+    <div class="tools">
+      <button id="hintToggle" class="tool-btn" aria-label="Saran kartu">💡</button>
+      <button id="sortBtn" class="tool-btn" aria-label="Urutkan kartu">⇅</button>
+      <button id="chatBtn" class="tool-btn" aria-label="Chat">💬</button>
     </div>
-
-    <div class="side-btns">
-      <button id="sortBtn" class="round-btn big" aria-label="Urutkan">⇅</button>
-      <button id="chatBtn" class="round-btn" aria-label="Chat">💬</button>
+    <div id="actions" class="actions hidden">
+      <div class="act-top">
+        <div class="clock"><span id="clockNum">20</span></div>
+        <button id="passBtn" class="btn orange act">Lewat</button>
+      </div>
+      <button id="playBtn" class="btn green act play">Buang</button>
     </div>
     <div id="chatMenu" class="chat-menu hidden"></div>
     <button id="voiceBtn" class="voice-btn off" aria-label="Voice chat"><span class="vi">🎤</span><span class="vl">Voice</span></button>
@@ -121,6 +133,8 @@
   </section>
 
   <div id="rules" class="overlay hidden"></div>
+  <div id="rulesEdit" class="overlay hidden"></div>
+  <div id="profile" class="overlay hidden"></div>
   <div id="myHist" class="overlay hidden"></div>
   <div id="friends" class="overlay hidden"></div>
   <div id="dm" class="overlay hidden"></div>

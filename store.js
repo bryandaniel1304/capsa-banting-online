@@ -80,6 +80,15 @@ const SCHEMA = [
   )`,
   'create index if not exists messages_pair on messages(from_id, to_id, id)',
   'create index if not exists messages_unread on messages(to_id, read_at)',
+  // saved table-rule presets per account
+  `create table if not exists rule_presets (
+    id serial primary key,
+    user_id integer not null references users(id) on delete cascade,
+    name text not null,
+    rules jsonb not null,
+    created_at timestamptz not null default now(),
+    unique (user_id, name)
+  )`,
   // live tables, so games survive server restarts / deploys / sleeping instances
   `create table if not exists live_rooms (
     code text primary key,
@@ -273,6 +282,32 @@ async function markRead(me, other) {
   await q('update messages set read_at = now() where to_id = $1 and from_id = $2 and read_at is null', [me, other]);
 }
 
+// ---------- public profiles ----------
+async function publicUser(id) {
+  return one('select id, username, name, avatar, created_at from users where id = $1', [id]);
+}
+// 'self' | 'friends' | 'outgoing' | 'incoming' | 'none'
+async function relation(me, other) {
+  if (me === other) return 'self';
+  const row = await friendRow(me, other);
+  if (!row) return 'none';
+  if (row.status === 'accepted') return 'friends';
+  return row.user_id === me ? 'outgoing' : 'incoming';
+}
+
+// ---------- rule presets ----------
+async function listPresets(userId) {
+  const rows = await q('select id, name, rules, created_at from rule_presets where user_id = $1 order by lower(name)', [userId]);
+  return rows.map((r) => ({ ...r, rules: parseJson(r.rules) }));
+}
+async function countPresets(userId) { return (await one('select count(*)::int as n from rule_presets where user_id = $1', [userId])).n; }
+async function savePreset(userId, name, rulesJson) {
+  return one(`insert into rule_presets (user_id, name, rules) values ($1, $2, $3::jsonb)
+              on conflict (user_id, name) do update set rules = excluded.rules, created_at = now()
+              returning id, name`, [userId, name, rulesJson]);
+}
+async function deletePreset(userId, id) { await q('delete from rule_presets where user_id = $1 and id = $2', [userId, id]); }
+
 // ---------- live rooms ----------
 const parseJson = (d) => (typeof d === 'string' ? JSON.parse(d) : d);
 async function saveLiveRoom(code, json) {
@@ -292,6 +327,7 @@ async function liveRoomForPlayer(token) {
 async function pruneLiveRooms() { await q("delete from live_rooms where updated_at < now() - interval '24 hours'"); }
 
 module.exports = {
+  publicUser, relation, listPresets, countPresets, savePreset, deletePreset,
   saveLiveRoom, deleteLiveRoom, liveRoomByCode, liveRoomForPlayer, pruneLiveRooms,
   requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,
   init, kind: () => db && db.kind,

@@ -2,6 +2,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const store = require('./store');
+const R = require('./shared/rules');
 
 const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻', '🦁', '🐷', '🐙', '🦄'];
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,20}$/;
@@ -182,6 +183,37 @@ function router(hooks = {}) {
 
   r.post('/messages/:id/read', auth, async (req, res, next) => {
     try { await store.markRead(req.user.id, idParam(req)); res.json({ ok: true }); } catch (e) { next(e); }
+  });
+
+  // ---------- public player profile (tap a player at the table) ----------
+  r.get('/users/:id', auth, async (req, res, next) => {
+    try {
+      const id = idParam(req);
+      const u = await store.publicUser(id);
+      if (!u) return res.status(404).json({ error: 'Pemain tidak ditemukan' });
+      const [stats, rel] = await Promise.all([store.stats(id), store.relation(req.user.id, id)]);
+      res.json({ user: u, stats, relation: rel, presence: rel === 'friends' || rel === 'self' ? presenceOf(id) : null });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- saved table-rule presets ----------
+  r.get('/presets', auth, async (req, res, next) => {
+    try { res.json({ presets: await store.listPresets(req.user.id), defaults: R.DEFAULT_RULES }); } catch (e) { next(e); }
+  });
+  r.post('/presets', auth, async (req, res, next) => {
+    try {
+      const name = String((req.body || {}).name || '').replace(/[<>]/g, '').trim().slice(0, 30);
+      if (!name) return res.status(400).json({ error: 'Beri nama aturan' });
+      if (/^default$|^aturan default$/i.test(name)) return res.status(400).json({ error: 'Nama itu dipakai untuk aturan bawaan' });
+      const existing = (await store.listPresets(req.user.id)).some((p) => p.name === name);
+      if (!existing && (await store.countPresets(req.user.id)) >= 20) return res.status(400).json({ error: 'Maksimal 20 aturan tersimpan' });
+      const rules = R.normalizeRules((req.body || {}).rules);
+      const saved = await store.savePreset(req.user.id, name, JSON.stringify(rules));
+      res.json({ preset: { ...saved, rules } });
+    } catch (e) { next(e); }
+  });
+  r.delete('/presets/:id', auth, async (req, res, next) => {
+    try { await store.deletePreset(req.user.id, idParam(req)); res.json({ ok: true }); } catch (e) { next(e); }
   });
 
   // ---------- voice chat ICE servers (STUN by default; set ICE_SERVERS to a JSON array to add TURN) ----------

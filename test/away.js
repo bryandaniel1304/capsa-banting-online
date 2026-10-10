@@ -37,7 +37,7 @@ function client(auth) {
   s.hello = () => call(s, 'hello', { auth });
   return s;
 }
-async function until(fn, ms = 120000) {
+async function until(fn, ms = 240000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) { if (fn()) return; await sleep(50); }
   throw new Error('timed out');
