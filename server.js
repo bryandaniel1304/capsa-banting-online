@@ -197,6 +197,10 @@ function startGame(room) {
   const deck = R.shuffle(R.newDeck());
   const hands = {};
   seats.forEach((s, i) => (hands[s] = rc.sortHand(deck.slice(i * 13, i * 13 + 13))));
+  if (process.env.CAPSA_TEST_HANDS) { // tests only: deal fixed hands
+    const fixed = JSON.parse(process.env.CAPSA_TEST_HANDS);
+    seats.forEach((s, i) => { if (fixed[i]) hands[s] = rc.sortHand(fixed[i]); });
+  }
   seats.forEach((s) => (room.seats[s].ready = false));
 
   // The previous winner opens (if the table's rules say so); otherwise the holder of the lowest card leads,
@@ -263,6 +267,8 @@ function doPlay(room, seat, cards) {
   if (!leading && !rc.beats(ev, g.lastPlay.ev)) {
     return g.lastPlay.ev.count !== ev.count ? 'Harus ' + g.lastPlay.ev.count + ' kartu' : 'Kartu kurang tinggi';
   }
+  const cekiBefore = room.rules.cekiDuty ? { hand: [...hand], tableEv: leading ? null : g.lastPlay.ev } : null;
+  const pendingFoul = g.cekiFoul; g.cekiFoul = null; // a foul only counts if the ceki player wins right away
   g.hands[seat] = hand.filter((c) => !cards.includes(c));
   g.mustInclude = null;
   g.free = false;
@@ -278,7 +284,11 @@ function doPlay(room, seat, cards) {
     g.bonus[seat].push({ label: ev.name, points: bonus });
     io.to(room.code).emit('fx', { type: 'bonus', seat, name: ev.name, points: bonus });
   }
-  if (!g.hands[seat].length) { endGame(room, seat, ev, g.lastPlay.cards); return null; }
+  if (!g.hands[seat].length) {
+    if (pendingFoul && pendingFoul.target === seat) g.cekiCharged = pendingFoul.seat;
+    endGame(room, seat, ev, g.lastPlay.cards);
+    return null;
+  }
   if (g.hands[seat].length === 1 && !g.ceki.includes(seat)) {
     g.ceki.push(seat);
     io.to(room.code).emit('fx', { type: 'ceki', seat });
@@ -291,6 +301,7 @@ function doPlay(room, seat, cards) {
     return null;
   }
   advance(room, seat);
+  markCekiDuty(room, seat, cekiBefore, ev, cards);
   return null;
 }
 
@@ -299,10 +310,46 @@ function doPass(room, seat) {
   if (!g || room.state !== 'playing') return 'Permainan belum dimulai';
   if (g.turn !== seat) return 'Bukan giliranmu';
   if (!g.lastPlay || g.free) return 'Kamu memulai ronde, harus buang kartu';
+  const cekiBefore = room.rules.cekiDuty ? { hand: [...g.hands[seat]], tableEv: g.lastPlay.ev } : null;
+  g.cekiFoul = null;
   g.passed.push(seat);
   io.to(room.code).emit('fx', { type: 'pass', seat });
   advance(room, seat);
+  markCekiDuty(room, seat, cekiBefore, null, null);
   return null;
+}
+
+// Optional "ceki" rule: the player acting right before someone on their last card must play their highest
+// single. Playing a lower single, or passing when the highest card could have stopped a single, is a foul;
+// if the ceki player then wins on their very next move, the fouling player gets extra points.
+// Holding them off with a pair / triple / 5-card play is fine (one card can't answer it).
+function markCekiDuty(room, seat, before, ev, cards) {
+  const g = room.game;
+  if (!before || room.state !== 'playing' || !g) return;
+  const next = g.turn;
+  if (next === seat || !g.hands[next] || g.hands[next].length !== 1) return;
+  const rc = room.rc;
+  const top = rc.highestCard(before.hand);
+  const foul = ev
+    ? ev.kind === 'single' && cards[0] !== top
+    : !!before.tableEv && before.tableEv.kind === 'single' && rc.beats(rc.evaluate([top]), before.tableEv);
+  if (foul) g.cekiFoul = { seat, target: next };
+}
+// Who would act after `from` (mirrors advance() without changing anything).
+function nextActor(room, from) {
+  const g = room.game;
+  for (let k = 1; k <= 4; k++) {
+    const t = (from + k) % 4;
+    if (!g.hands[t] || g.passed.includes(t) || (room.seats[t] && room.seats[t].sitOut)) continue;
+    return t;
+  }
+  return null;
+}
+function cekiDutyFor(room, seat) {
+  const g = room.game;
+  if (!room.rules.cekiDuty || !g || room.state !== 'playing' || g.turn !== seat) return null;
+  const n = nextActor(room, seat);
+  return n != null && n !== seat && g.hands[n] && g.hands[n].length === 1 ? n : null;
 }
 
 // Counter-clockwise turn order. A pass locks the player out until the round ends.
@@ -380,6 +427,10 @@ function endGame(room, winner, finalEv, finalCards) {
       if (twos && room.rules.twoLeftPoints) items.push({ label: 'Sisa ' + twos + ' kartu 2', points: twos * room.rules.twoLeftPoints });
     }
     items.push(...g.bonus[s]);
+    if (g.cekiCharged === s && room.rules.cekiDuty) {
+      const w = room.seats[winner];
+      items.push({ label: 'Ceki ' + (w ? w.name : '') + ': tidak buang kartu tertinggi', points: room.rules.cekiPenaltyPoints });
+    }
     const points = items.reduce((a, b) => a + b.points, 0);
     if (p) {
       p.score += points; p.games++;
@@ -443,6 +494,8 @@ function autoAct(room) {
   const g = room.game;
   if (!g || room.state !== 'playing') return;
   const seat = g.turn;
+  // a timed-out / disconnected player must not be fined by the ceki rule: play it the safe way for them
+  if (cekiDutyFor(room, seat) != null) return botAct(room);
   if (!g.lastPlay || g.free) doPlay(room, seat, [g.mustInclude != null ? g.mustInclude : room.rc.lowestCard(g.hands[seat])]);
   else doPass(room, seat);
 }
@@ -454,6 +507,20 @@ function botAct(room) {
   const hand = g.hands[seat];
   const toBeat = g.lastPlay && !g.free ? g.lastPlay.ev : null;
   let pick = room.rc.suggest(hand, toBeat, g.mustInclude);
+  if (cekiDutyFor(room, seat) != null) {
+    const rc = room.rc;
+    const top = rc.highestCard(hand);
+    if (toBeat) {
+      if (toBeat.kind === 'single') pick = rc.beats(rc.evaluate([top]), toBeat) ? [top] : null;
+    } else if (!pick || pick.length === 1) {
+      // lead something the ceki player can't answer, or else the highest single
+      const multi = rc.allCombos(hand).filter((c) => c.cards.length > 1 && (g.mustInclude == null || c.cards.includes(g.mustInclude)));
+      multi.sort((a, b) => a.cards.length - b.cards.length || a.ev.key - b.ev.key);
+      pick = multi.length ? multi[0].cards : g.mustInclude != null ? [g.mustInclude] : [top];
+    }
+    if (pick) doPlay(room, seat, pick); else doPass(room, seat);
+    return;
+  }
   if (pick && toBeat) {
     // hold back 2s early unless an opponent is close to going out
     const danger = occupied(room).some((s) => s !== seat && g.hands[s] && g.hands[s].length <= 3);
@@ -564,6 +631,7 @@ function viewFor(room, token) {
     history: playing ? g.history : [],
     mustInclude: playing ? g.mustInclude : null,
     free: playing && !!g.free,
+    cekiDuty: me >= 0 ? cekiDutyFor(room, me) : null,
     result: room.result,
     gameLog: room.history,
     endVote: room.endVote && {

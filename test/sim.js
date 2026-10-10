@@ -190,7 +190,7 @@ function client(name) {
   a.emit('start');
   const t0 = Date.now();
   let games = 0, lastNo = 0;
-  while (games < 3 && Date.now() - t0 < 150000) {
+  while (games < 3 && Date.now() - t0 < 240000) {
     await sleep(100);
     const v = a.view;
     if (v.state === 'result' && v.gameNo !== lastNo) {

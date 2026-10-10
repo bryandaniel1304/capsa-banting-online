@@ -696,7 +696,7 @@
   const ACTION_GUARD_MS = 450;
   function renderActions() {
     const act = $('#actions'), hints = $('#hints');
-    if (!myTurn()) { act.classList.add('hidden'); hints.innerHTML = ''; return; }
+    if (!myTurn()) { act.classList.add('hidden'); hints.innerHTML = ''; $('#dutyWarn').classList.add('hidden'); return; }
     if (act.classList.contains('hidden')) actionsShownAt = Date.now();
     act.classList.remove('hidden');
     const sel = [...selected];
@@ -705,7 +705,20 @@
     if (V.mustInclude != null && !sel.includes(V.mustInclude)) ok = false;
     $('#playBtn').disabled = !ok;
     $('#passBtn').disabled = !lastEv();
-    const sug = hintsOn ? suggestions() : [];
+    const duty = V.cekiDuty != null ? V.seats[V.cekiDuty] : null;
+    const dw = $('#dutyWarn');
+    if (duty) {
+      dw.innerHTML = '⚠️ <b>' + esc(duty.name) + ' CEKI</b> · buang kartu tertinggimu (atau tahan pakai pair / three / 5 kartu)';
+      dw.classList.remove('hidden');
+    } else dw.classList.add('hidden');
+    let sug = hintsOn ? suggestions() : [];
+    if (hintsOn && duty) {
+      const top = G.highestCard(V.hand);
+      const le = lastEv();
+      if (!le || (le.kind === 'single' && G.beats(G.evaluate([top]), le))) {
+        sug = [{ cards: [top], ev: G.evaluate([top]), sig: 'top' }].concat(sug.filter((x) => !(x.cards.length === 1))).slice(0, 3);
+      }
+    }
     hints.innerHTML = sug.map((s, i) => '<button class="hint' + (i === hintIdx ? ' on' : '') + '" data-h="' + i + '">' + miniHTML(s.cards) + '<span>' + (s.ev.kind === 'five' || s.ev.kind === 'dragon' ? s.ev.name : HINT_NAME[s.ev.kind]) + '</span></button>').join('');
     hints.querySelectorAll('.hint').forEach((b) => (b.onclick = () => {
       const s = sug[+b.dataset.h];
@@ -1057,6 +1070,7 @@
       '<tr><td>2♠ langsung main lagi</td><td>' + yesNo(r.twoSpadeFree) + '</td></tr>' +
       '<tr><td>Dragon (13 kartu berurutan) menang otomatis</td><td>' + yesNo(r.dragon) + '</td></tr>' +
       '<tr><td>Flush berisi 2 lebih tinggi dari flush tanpa 2</td><td>' + yesNo(r.flushTwoHigh) + '</td></tr>' +
+      '<tr><td>Ceki: pemain sebelum yang ceki wajib buang kartu tertinggi</td><td>' + (r.cekiDuty ? 'Ya (denda ' + signed(r.cekiPenaltyPoints) + ')' : 'Tidak') + '</td></tr>' +
       '<tr><th colspan="2">Poin (semakin rendah semakin bagus)</th></tr>' +
       '<tr><td>Menang (kartu habis)</td><td>' + signed(r.winPoints) + '</td></tr>' +
       '<tr><td>Menang dengan menutup kartu 2 tunggal</td><td>' + (r.winTwoOn ? signed(r.winTwoPoints) : 'tidak dipakai') + '</td></tr>' +
@@ -1085,6 +1099,9 @@
       '<h4>Perbandingan</h4><p>Tunggal &amp; pasangan: nilai, lalu jenis kartu tertinggi. Tiga kembar, full house, empat kembar: nilai kartu kembarnya. Urutan &amp; straight flush: kartu tertinggi (nilai lalu jenis). Flush: jenis dulu, lalu kartu tertinggi' +
       (r.flushTwoHigh ? ' — dengan aturan meja ini, flush yang berisi kartu 2 selalu lebih tinggi dari flush tanpa 2' : '') + '. Royal flush: bandingkan jenis.</p>' +
       '<h4>Lainnya</h4><p>Bonus paket berlaku untuk siapa pun yang mengeluarkannya dan dijumlahkan. <b>Ceki</b>: pemain yang tinggal 1 kartu otomatis mengumumkan "CEKI!". Nilai = poin × pengali meja.</p>' +
+      (r.cekiDuty ? '<p><b>Aturan ceki aktif</b>: jika pemain berikutnya ceki, kamu wajib membuang kartu <b>tertinggi</b>mu (tunggal), atau menahannya dengan pair / three / 5 kartu. ' +
+        'Jika kamu membuang kartu tunggal yang bukan tertinggi, atau lewat padahal kartu tertinggimu bisa menahan, lalu pemain ceki langsung menang, kamu kena denda ' + signed(r.cekiPenaltyPoints) + ' poin. ' +
+        'Jika kamu sudah membuang kartu tertinggi dan ia tetap menang, tidak ada denda.</p>' : '') +
       '<p>Koneksi terputus: saat kembali kamu ditanya apakah ingin melanjutkan. Permainan tersimpan walaupun server sempat mati.</p>' +
       '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil. Host bisa mengusulkan mengakhiri permainan, dan semua pemain online harus setuju. ' +
       'Pemain diurutkan dari total poin tertinggi (#1) ke terendah. Setiap pasangan dibayar: (poin pemain atas − poin pemain bawah) × pengali.</p>' +
@@ -1459,6 +1476,7 @@
     ['dragon', 'Dragon (13 kartu berurutan) menang otomatis'],
     ['flushTwoHigh', 'Flush berisi kartu 2 lebih tinggi dari flush tanpa 2'],
     ['winTwoOn', 'Menang dengan menutup kartu 2 tunggal dapat poin khusus'],
+    ['cekiDuty', 'Ceki: pemain sebelum yang ceki wajib buang kartu tertinggi'],
   ];
   const RULE_NEG = [
     ['winPoints', 'Poin menang'], ['winTwoPoints', 'Menang tutup 2 tunggal'], ['bonusFour', 'Bonus Empat Kembar'],
@@ -1485,6 +1503,7 @@
       '<div class="re-sub">Sisa kartu yang kalah (poin = jumlah kartu × pengali)</div><div id="reTiers">' + tiersHTML(r.tiers) + '</div>' +
       (r.tiers.length < 6 ? '<button type="button" class="btn ghost small dark" id="reAddTier">+ Tambah tingkat</button>' : '') +
       '<label class="re-field"><span>Per kartu 2 yang masih dipegang</span><b class="sign">+</b><input data-pos="twoLeftPoints" inputmode="numeric" value="' + Math.abs(r.twoLeftPoints) + '"></label>' +
+      '<label class="re-field"><span>Denda ceki (jika aturan ceki aktif)</span><b class="sign">+</b><input data-pos="cekiPenaltyPoints" inputmode="numeric" value="' + Math.abs(r.cekiPenaltyPoints) + '"></label>' +
       '</section></div>';
   }
   function readEditor() {

@@ -25,6 +25,8 @@
     twoSpadeFree: true, // 2♠ (single, or pair/triple of 2s with 2♠) plays again right away
     dragon: true, // 13 different ranks may be played at once and win immediately
     flushTwoHigh: false, // variant: a flush that contains a 2 beats any flush without a 2
+    cekiDuty: false, // variant: the player right before someone on their last card (ceki) must play their highest single
+    cekiPenaltyPoints: 150, // ...otherwise, if the ceki player then wins, that player gets these extra points
     winPoints: -10,
     winTwoOn: true, // closing the game with a single 2 scores winTwoPoints instead
     winTwoPoints: -20,
@@ -55,6 +57,8 @@
       twoSpadeFree: bool(r.twoSpadeFree, d.twoSpadeFree),
       dragon: bool(r.dragon, d.dragon),
       flushTwoHigh: bool(r.flushTwoHigh, d.flushTwoHigh),
+      cekiDuty: bool(r.cekiDuty, d.cekiDuty),
+      cekiPenaltyPoints: int(r.cekiPenaltyPoints, 0, 1000, d.cekiPenaltyPoints),
       winPoints: int(r.winPoints, -200, 0, d.winPoints),
       winTwoOn: bool(r.winTwoOn, d.winTwoOn),
       winTwoPoints: int(r.winTwoPoints, -300, 0, d.winTwoPoints),
@@ -111,6 +115,7 @@
     const pw = (c) => rankOf(c) * 4 + suitRank[suitOf(c)]; // single-card strength
     const byPw = (a, b) => pw(a) - pw(b);
     const lowestCard = (cards) => cards.reduce((m, c) => (m == null || pw(c) < pw(m) ? c : m), null);
+    const highestCard = (cards) => cards.reduce((m, c) => (m == null || pw(c) > pw(m) ? c : m), null);
     const isDragon = (cards) => cards.length === 13 && new Set(cards.map(rankOf)).size === 13;
 
     // Returns { kind, count, type, key, name } or null when the cards are not a legal combination.
@@ -233,7 +238,7 @@
     }
 
     return {
-      rules, pw, lowestCard, evaluate, beats, isDragon, bonusFor, penaltyPerCard, penaltyPoints, winPoints,
+      rules, pw, lowestCard, highestCard, evaluate, beats, isDragon, bonusFor, penaltyPerCard, penaltyPoints, winPoints,
       twoLeftPenalty, freeTurnAfter, allCombos, suggest, sortHand,
       suitsAscending: [0, 1, 2, 3].sort((a, b) => suitRank[a] - suitRank[b]).map((s) => SUITS[s]),
     };

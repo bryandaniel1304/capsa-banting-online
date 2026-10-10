@@ -61,7 +61,7 @@ Storage:
 ## Table rules & presets
 Capsa Banting has many house-rule variants, so every table has its own rules (`shared/rules.js` → `DEFAULT_RULES`, `make(rules)`):
 turn time, suit order (♦<♣<♥<♠ or ♣<♦<♥<♠), first lead must use the lowest card, winner opens the next game, pass locks you out
-until the round ends, 2♠ plays again, dragon, *flush containing a 2 beats flushes without a 2*, and all scoring values
+until the round ends, 2♠ plays again, dragon, *flush containing a 2 beats flushes without a 2*, *ceki duty* (the player right before someone on their last card must play their highest single, else +150 if that player wins next), and all scoring values
 (win points, closing with a single 2, remaining-card tiers, points per 2 left, package bonuses).
 - Only the player who **created** the table can change its rules, and only before the first game. Everyone can view them (📋).
 - Rules can be **saved as presets** on your account and picked for the next table you create; **Aturan Default** is always available.
