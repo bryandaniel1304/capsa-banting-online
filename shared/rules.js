@@ -27,6 +27,8 @@
     flushTwoHigh: false, // variant: a flush that contains a 2 beats any flush without a 2
     cekiDuty: false, // variant: the player right before someone on their last card (ceki) must play their highest single
     cekiPenaltyPoints: 150, // ...otherwise, if the ceki player then wins, that player gets these extra points
+    customNotes: Object.freeze([]), // house rules written by the table creator: [{ title, text }] (shown to everyone)
+    customPoints: Object.freeze([]), // house point items given by hand on the result screen: [{ name, points }]
     winPoints: -10,
     winTwoOn: true, // closing the game with a single 2 scores winTwoPoints instead
     winTwoPoints: -20,
@@ -68,6 +70,11 @@
       bonusRoyal: int(r.bonusRoyal, -500, 0, d.bonusRoyal),
       bonusDragon: int(r.bonusDragon, -500, 0, d.bonusDragon),
     };
+    const txt = (v, n) => String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, n);
+    out.customNotes = (Array.isArray(r.customNotes) ? r.customNotes : []).slice(0, 10)
+      .map((x) => ({ title: txt(x && x.title, 40), text: txt(x && x.text, 300) })).filter((x) => x.title || x.text);
+    out.customPoints = (Array.isArray(r.customPoints) ? r.customPoints : []).slice(0, 10)
+      .map((x) => ({ name: txt(x && x.name, 40), points: int(x && x.points, -500, 500, 0) })).filter((x) => x.name && x.points);
     // remaining-card tiers: ascending "up to N cards -> xM", the last one always covers 13
     let tiers = Array.isArray(r.tiers) ? r.tiers.slice(0, 6).map((t) => ({ upTo: int(t && t.upTo, 1, 13, 13), x: int(t && t.x, 0, 20, 1) })) : null;
     if (tiers && tiers.length) {

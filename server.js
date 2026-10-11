@@ -442,9 +442,10 @@ function endGame(room, winner, finalEv, finalCards) {
     });
   }
   rows.sort((a, b) => b.winner - a.winner || a.points - b.points);
-  room.result = { winner, rows, mult: room.mult, dragon: finalEv.kind === 'dragon' };
+  const finalPlay = { seat: winner, cards: finalCards, name: finalEv.name };
+  room.result = { winner, rows, mult: room.mult, dragon: finalEv.kind === 'dragon', final: finalPlay };
   room.history.push({
-    no: room.history.length + 1, winner: room.seats[winner].name, at: Date.now(),
+    no: room.history.length + 1, winner: room.seats[winner].name, at: Date.now(), finalCards: finalCards, finalName: finalEv.name,
     rows: rows.map((r) => ({ seat: r.seat, name: r.name, points: r.points, detail: r.items.map((i) => i.label + ' ' + i.points).join(', ') })),
   });
   persistGame(room, rows);
@@ -471,7 +472,7 @@ function persistGame(room, rows) {
   const match = room.match;
   const last = room.history[room.history.length - 1];
   const game = {
-    gameNo: last.no, winnerName: last.winner, mult: room.mult,
+    gameNo: last.no, winnerName: last.winner, mult: room.mult, finalCards: last.finalCards,
     rows: rows.map((r) => {
       const p = room.seats[r.seat];
       return { pkey: p ? pkeyOf(p) : 'seat:' + r.seat, userId: p && p.userId, name: r.name, points: r.points, left: r.left,
@@ -880,6 +881,44 @@ io.on('connection', (socket) => {
     if (!p.bot && p.socketId) io.to(p.socketId).emit('kicked');
     removePlayer(room, seat);
     if (rooms.has(room.code)) broadcast(room);
+  });
+
+  // House point items (rules.customPoints) are given by hand on the result screen by the table creator or host.
+  socket.on('adjust', ({ op, seat, idx, id } = {}, cb) => {
+    const room = roomOf();
+    if (!room || room.state !== 'result' || !room.result) return ack(cb, { error: 'Hanya bisa di layar hasil game' });
+    if (token !== room.creatorToken && token !== room.hostToken) return ack(cb, { error: 'Hanya pembuat meja / host yang bisa memberi poin tambahan' });
+    const row = room.result.rows.find((r) => r.seat === +seat);
+    if (!row) return ack(cb, { error: 'Pemain tidak ditemukan' });
+    const p = room.seats[row.seat];
+    let delta, label;
+    if (op === 'remove') {
+      const i = row.items.findIndex((x) => x.manual && x.id === id);
+      if (i < 0) return ack(cb, { error: 'Item tidak ditemukan' });
+      ({ label } = row.items[i]);
+      delta = -row.items[i].points;
+      row.items.splice(i, 1);
+    } else {
+      const item = room.rules.customPoints[+idx];
+      if (!item) return ack(cb, { error: 'Item poin tidak ditemukan' });
+      label = item.name; delta = item.points;
+      row.items.push({ label: item.name, points: item.points, manual: true, id: Math.random().toString(36).slice(2, 10) });
+    }
+    row.points += delta;
+    if (p) p.score += delta;
+    row.total = p ? p.score : row.total + delta;
+    const detail = row.items.map((i) => i.label + ' ' + i.points).join(', ');
+    const last = room.history[room.history.length - 1];
+    const h = last && last.rows.find((r) => r.seat === row.seat);
+    if (h) { h.points = row.points; h.detail = detail; }
+    const match = room.match;
+    if (p && last) {
+      const key = pkeyOf(p), pts = row.points, score = p.score;
+      dbTask(room, async () => { if (match.id) await store.adjustGame(match.id, last.no, key, pts, detail, score); });
+    }
+    io.to(room.code).emit('toast', { msg: op === 'remove' ? '↩️ Dibatalkan: ' + row.name + ' · ' + label : '➕ ' + row.name + ' · ' + label + ' ' + (delta > 0 ? '+' : '') + delta });
+    broadcast(room);
+    ack(cb, { ok: true });
   });
 
   // Table rules: only the player who created the table, and only before a game is played.

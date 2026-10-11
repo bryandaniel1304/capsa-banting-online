@@ -53,19 +53,24 @@ function client(auth, autoplay) {
   a.emit('addBot', { seat: 2 }); a.emit('addBot', { seat: 3 });
   await sleep(300);
   a.emit('start');
-  // play until a few cards are gone and it is a human's turn, then freeze the humans so the snapshot is stable
-  for (let i = 0; i < 400; i++) {
-    await sleep(100);
-    const v = a.view;
-    if (v.state === 'playing' && v.hand.length <= 11 && (v.turn === v.you || v.turn === b.view.you)) break;
-  }
-  a.autoplay = false; b.autoplay = false;
-  // wait until bots are done and the table is quiet (a human's turn, unchanged for 1.5s), so the save has landed
-  for (let i = 0, last = '', since = Date.now(); i < 300; i++) {
-    await sleep(100);
-    const k = JSON.stringify([a.view.turn, a.view.lastPlay, a.view.seats.map((p) => p && p.count)]);
-    if (k !== last) { last = k; since = Date.now(); continue; }
-    if ((a.view.turn === a.view.you || a.view.turn === b.view.you) && Date.now() - since > 1500) break;
+  // play until a few cards are gone and it is a human's turn, then freeze the humans so the snapshot is stable.
+  // A random deal can end a game before that point: then just confirm and try again in the next game.
+  for (let attempt = 0; attempt < 5 && a.view.state !== 'playing' || attempt === 0; attempt++) {
+    if (a.view.state === 'result') { a.autoplay = true; b.autoplay = true; a.emit('ready'); b.emit('ready'); await sleep(500); }
+    for (let i = 0; i < 400; i++) {
+      await sleep(100);
+      const v = a.view;
+      if (v.state === 'result') break;
+      if (v.state === 'playing' && v.hand.length <= 11 && (v.turn === v.you || v.turn === b.view.you)) break;
+    }
+    a.autoplay = false; b.autoplay = false;
+    // wait until bots are done and the table is quiet (a human's turn, unchanged for 1.5s), so the save has landed
+    for (let i = 0, last = '', since = Date.now(); i < 300 && a.view.state === 'playing'; i++) {
+      await sleep(100);
+      const k = JSON.stringify([a.view.turn, a.view.lastPlay, a.view.seats.map((p) => p && p.count)]);
+      if (k !== last) { last = k; since = Date.now(); continue; }
+      if ((a.view.turn === a.view.you || a.view.turn === b.view.you) && Date.now() - since > 1500) break;
+    }
   }
   const before = { a: a.view, b: b.view };
   assert.equal(before.a.state, 'playing', 'game in progress before restart');
@@ -105,7 +110,7 @@ function client(auth, autoplay) {
   assert.equal(a.view.state, 'result', 'game finished after restart');
   await sleep(800);
   const hist = await (await fetch(url + '/api/history', { headers: { Authorization: 'Bearer ' + A.token } })).json();
-  assert.equal(hist.matches[0].games, 1, 'finished game saved to history');
+  assert.equal(hist.matches[0].games, before.a.gameNo, 'finished game saved to history');
   console.log('game finished after restart and saved OK');
   a.close(); b.close(); srv.kill(); process.exit(0);
 })().catch((e) => { console.error(e); if (srv) srv.kill(); process.exit(1); });

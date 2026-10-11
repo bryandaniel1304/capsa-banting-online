@@ -65,6 +65,10 @@ until the round ends, 2♠ plays again, dragon, *flush containing a 2 beats flus
 (win points, closing with a single 2, remaining-card tiers, points per 2 left, package bonuses).
 - Only the player who **created** the table can change its rules, and only before the first game. Everyone can view them (📋).
 - Rules can be **saved as presets** on your account and picked for the next table you create; **Aturan Default** is always available.
+- **Aturan Tambahan** extend (never replace) the platform rules: written "cara main" notes shown to everyone in 📋, and named point items
+  (e.g. "Tutup pakai As −15") that the table creator / host gives by hand on the result screen (✕ to undo). They count in the
+  game points, the session total, the final settlement and the saved history, and are kept in presets.
+- The **closing play** (Kartu penutup) of each game is shown on the result screen, in the table history and in Riwayat Saya.
 
 ## Players
 Tap a player at the table to see their profile and stats, and add them as a friend (or accept / chat).

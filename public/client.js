@@ -137,6 +137,10 @@
     return '<div class="card' + red + extra + '" data-id="' + c + '"><div class="cr">' + R.RANKS[R.rankOf(c)] + '</div><div class="cs">' + s + '</div><div class="cb">' + s + '</div></div>';
   }
   const miniHTML = (cards) => '<div class="mini">' + cards.map((c) => cardHTML(c)).join('') + '</div>';
+  // The play that ended a game (a dragon is the whole hand: show its name only).
+  const finalName = (cards, name) => name || ((cards && R.evaluate(cards)) || {}).name || '';
+  const finalHTML = (cards, name) => (!cards || !cards.length ? '' : '<div class="fin">' +
+    (cards.length <= 5 ? miniHTML(cards) : '') + '<span>' + esc(finalName(cards, name)) + '</span></div>');
   function toast(msg, error) {
     const t = document.createElement('div');
     t.className = 'toast' + (error ? ' error' : '');
@@ -788,14 +792,20 @@
     const waiting = V.seats.filter((p) => p && !p.away && !p.ready).map((p) => p.name);
     const canEnd = V.host === V.you || V.hostAway || away.length;
     const winName = V.seats[r.winner] ? V.seats[r.winner].name : 'Pemenang';
+    const extra = (V.rules && V.rules.customPoints) || [];
+    const canAdjust = extra.length && (V.creator === V.you || V.host === V.you);
     el.classList.remove('hidden');
     el.innerHTML = '<div class="result-box"><div class="result-head"><div class="crown">' + (r.dragon ? '🐉' : '👑') + '</div><div class="title">' +
-      (iWon ? 'KAMU MENANG!' : esc(winName) + ' Menang') + '</div><div class="rsub">Pengali x' + num(r.mult) + ' · semakin rendah poin semakin bagus</div></div>' +
+      (iWon ? 'KAMU MENANG!' : esc(winName) + ' Menang') + '</div><div class="rsub">Pengali x' + num(r.mult) + ' · semakin rendah poin semakin bagus</div>' +
+      (r.final ? '<div class="final-play"><div class="fp-lbl">Kartu penutup</div>' + finalHTML(r.final.cards, r.final.name) + '</div>' : '') + '</div>' +
       '<div class="result-rows"><div class="rrow rhead"><span></span><span>Pemain</span><span>Sisa kartu</span><span>Game ini</span><span>Total</span></div>' +
       r.rows.map((row) =>
         '<div class="rrow' + (row.winner ? ' win' : '') + '"><div class="avatar">' + esc(row.avatar) + '</div>' +
         '<div><div class="rn">' + esc(row.name) + (row.seat === V.you ? ' (kamu)' : '') + (row.winner ? ' 🏆' : '') + '</div><div class="rl">' +
-        row.items.map((i) => esc(i.label) + ' ' + pts(i.points)).join(' · ') + '</div></div>' +
+        row.items.map((i) => (i.manual ? '<span class="man">✍️ ' + esc(i.label) + ' ' + pts(i.points) +
+          (canAdjust ? '<button class="man-x" data-unadj="' + row.seat + '" data-id="' + esc(i.id) + '" aria-label="Batalkan">✕</button>' : '') + '</span>'
+          : esc(i.label) + ' ' + pts(i.points))).join(' · ') +
+        (canAdjust ? ' <button class="adj-btn" data-adj="' + row.seat + '">＋ Poin</button>' : '') + '</div></div>' +
         '<div>' + (row.cards.length ? miniHTML(row.cards) : '') + '</div>' +
         '<div class="delta ' + (row.points <= 0 ? 'pos' : 'neg') + '">' + pts(row.points) + '<small>' + num(row.points * r.mult) + '</small></div>' +
         '<div class="delta tot ' + (row.total <= 0 ? 'pos' : 'neg') + '">' + pts(row.total) + '<small>' + num(row.total * r.mult) + '</small></div></div>').join('') + '</div>' +
@@ -808,10 +818,29 @@
     const rb = $('#readyBtn'); if (rb) rb.onclick = () => socket.emit('ready');
     const eb = $('#endBtn'); if (eb) eb.onclick = proposeEnd;
     $('#resHist').onclick = openHistory;
+    el.querySelectorAll('[data-adj]').forEach((b) => (b.onclick = () => pickExtraPoint(+b.dataset.adj)));
+    el.querySelectorAll('[data-unadj]').forEach((b) => (b.onclick = () => socket.emit('adjust', { op: 'remove', seat: +b.dataset.unadj, id: b.dataset.id }, (res) => res && res.error && toast(res.error, true))));
     if (away.length && !meReady && !V.endVote) {
       const key = V.code + ':' + V.gameNo + ':' + away.map((p) => p.name).join(',');
       if (key !== contKey) { contKey = key; setTimeout(() => promptContinue(key), 1200); } // let the result show first
     }
+  }
+
+  // House point items from the table rules, given by hand by the table creator / host.
+  function pickExtraPoint(seat) {
+    const items = V.rules.customPoints || [];
+    const name = V.seats[seat] ? V.seats[seat].name : 'pemain';
+    const el = $('#ask');
+    el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">➕ Poin Tambahan · ' + esc(name) + '</div>' +
+      '<div class="cp-list">' + items.map((it, i) => '<button class="cp-item" data-i="' + i + '"><span>' + esc(it.name) + '</span><b class="' + (it.points <= 0 ? 'good' : 'bad') + '">' + pts(it.points) + '</b></button>').join('') + '</div>' +
+      '<div class="row"><button class="btn ghost dark" id="askNo">Batal</button></div></div>';
+    el.classList.remove('hidden');
+    const done = () => { el.classList.add('hidden'); el.innerHTML = ''; };
+    $('#askNo').onclick = done;
+    el.querySelectorAll('.cp-item').forEach((b) => (b.onclick = () => {
+      done();
+      socket.emit('adjust', { op: 'add', seat, idx: +b.dataset.i }, (res) => res && res.error && toast(res.error, true));
+    }));
   }
 
   // Someone went offline or chose not to continue: the players still here decide whether to go on without them.
@@ -856,14 +885,14 @@
     const names = [];
     hist.forEach((g) => g.rows.forEach((r) => { if (!names.includes(r.name)) names.push(r.name); }));
     const totals = names.map(() => 0);
-    const body = hist.map((g) => '<tr><td>#' + g.no + '</td><td>' + esc(g.winner) + '</td>' + names.map((n, i) => {
+    const body = hist.map((g) => '<tr><td>#' + g.no + '</td><td>' + esc(g.winner) + '</td><td class="fin-td">' + (finalHTML(g.finalCards, g.finalName) || '-') + '</td>' + names.map((n, i) => {
       const r = g.rows.find((x) => x.name === n);
       if (!r) return '<td>-</td>';
       totals[i] += r.points;
       return '<td class="' + (r.points <= 0 ? 'good' : 'bad') + '" title="' + esc(r.detail) + '">' + pts(r.points) + '</td>';
     }).join('') + '</tr>').join('');
-    return '<div class="tbl-wrap"><table class="hist"><tr><th>Game</th><th>Menang</th>' + names.map((n) => '<th>' + esc(n) + '</th>').join('') + '</tr>' + body +
-      '<tr class="tot"><td colspan="2">Total poin</td>' + totals.map((t) => '<td class="' + (t <= 0 ? 'good' : 'bad') + '">' + pts(t) + '</td>').join('') + '</tr></table></div>';
+    return '<div class="tbl-wrap"><table class="hist"><tr><th>Game</th><th>Menang</th><th>Kartu penutup</th>' + names.map((n) => '<th>' + esc(n) + '</th>').join('') + '</tr>' + body +
+      '<tr class="tot"><td colspan="3">Total poin</td>' + totals.map((t) => '<td class="' + (t <= 0 ? 'good' : 'bad') + '">' + pts(t) + '</td>').join('') + '</tr></table></div>';
   }
   function renderHistory() {
     $('#history').innerHTML = '<div class="rules-box"><div class="rules-head">📜 Riwayat Game<button id="histClose">✕</button></div><div class="rules-body">' +
@@ -953,13 +982,14 @@
   function matchDetailHTML(d) {
     const mult = d.match.mult;
     const total = computePays(d.players.map((p) => ({ name: p.name, score: p.total_points })), mult);
-    const games = d.games.map((g) => ({ no: g.game_no, winner: g.winner_name, rows: g.rows.map((r) => ({ name: r.name, points: r.points, detail: r.detail })) }));
+    const games = d.games.map((g) => ({ no: g.game_no, winner: g.winner_name, finalCards: g.final_cards, rows: g.rows.map((r) => ({ name: r.name, points: r.points, detail: r.detail })) }));
     return '<h5>Poin per Game</h5>' + historyTable(games) +
       '<h5>Pembayaran Akhir (total ' + d.games.length + ' game · x' + num(mult) + ')</h5>' + paysHTML(total, mult) +
       d.games.map((g) => {
         const rows = [...g.rows].sort((a, b) => a.points - b.points);
         const gs = computePays(rows.map((r) => ({ name: r.name, score: r.points })), mult);
-        return '<div class="gcard"><div class="ghead">Game #' + g.game_no + ' · Menang <b>' + esc(g.winner_name) + '</b> 🏆</div>' +
+        return '<div class="gcard"><div class="ghead">Game #' + g.game_no + ' · Menang <b>' + esc(g.winner_name) + '</b> 🏆' +
+          (g.final_cards ? '<span class="gfin">Kartu penutup ' + finalHTML(g.final_cards) + '</span>' : '') + '</div>' +
           '<div class="tbl-wrap"><table class="hist"><tr><th>Pemain</th><th>Rincian</th><th>Poin</th><th>Nilai</th></tr>' +
           rows.map((r) => '<tr><td>' + esc(r.name) + (r.is_winner ? ' 🏆' : '') + '</td><td class="det">' + esc(r.detail || '') + '</td>' +
             '<td class="' + (r.points <= 0 ? 'good' : 'bad') + '">' + pts(r.points) + '</td><td>' + num(r.points * mult) + '</td></tr>').join('') + '</table></div>' +
@@ -1080,12 +1110,17 @@
       '<tr><td>Bonus Straight Flush</td><td>' + signed(r.bonusStraightFlush) + '</td></tr>' +
       '<tr><td>Bonus Royal Flush</td><td>' + signed(r.bonusRoyal) + '</td></tr>' +
       (r.dragon ? '<tr><td>Menang dengan Dragon</td><td>' + signed(r.bonusDragon) + ' (tanpa poin menang)</td></tr>' : '') +
+      (r.customPoints && r.customPoints.length ? '<tr><th colspan="2">Poin Tambahan (diberikan pembuat meja / host di layar hasil)</th></tr>' +
+        r.customPoints.map((x) => '<tr><td>' + esc(x.name) + '</td><td>' + signed(x.points) + '</td></tr>').join('') : '') +
       '</table></div>';
   }
   function rulesGuideHTML(r, title) {
     const suits = R.make(r).suitsAscending.join(' < ');
     return '<div class="rules-box"><div class="rules-head">' + esc(title) + '<button id="rulesClose" aria-label="Tutup">✕</button></div><div class="rules-body">' +
       '<h4>Aturan yang berlaku</h4>' + rulesTableHTML(r) +
+      (r.customNotes && r.customNotes.length ? '<h4>Cara Main Tambahan (aturan meja)</h4>' +
+        r.customNotes.map((x) => '<p class="cnote">' + (x.title ? '<b>' + esc(x.title) + '</b>' + (x.text ? ' — ' : '') : '') + esc(x.text) + '</p>').join('') +
+        '<p class="muted">Aturan tambahan melengkapi aturan dasar platform di bawah ini, tidak menggantikannya.</p>' : '') +
       '<h4>Tujuan</h4><p>2 - 4 pemain, masing-masing dibagikan 13 kartu. Jadilah yang pertama menghabiskan semua kartu. Bermain bertiga: 13 kartu sisanya disimpan di deck bandar.</p>' +
       '<h4>Peringkat Kartu</h4><p>3 &lt; 4 &lt; 5 &lt; 6 &lt; 7 &lt; 8 &lt; 9 &lt; 10 &lt; J &lt; Q &lt; K &lt; A &lt; 2. Jika nilainya sama, bandingkan jenis: ' + suits + '.</p>' +
       '<h4>Cara Bermain</h4><p>Giliran berjalan berlawanan arah jarum jam. <b>Buang</b>: kalahkan kombinasi sebelumnya dengan jumlah kartu yang sama dan nilai lebih tinggi. <b>Lewat</b>: lewati giliran. ' +
@@ -1504,7 +1539,34 @@
       (r.tiers.length < 6 ? '<button type="button" class="btn ghost small dark" id="reAddTier">+ Tambah tingkat</button>' : '') +
       '<label class="re-field"><span>Per kartu 2 yang masih dipegang</span><b class="sign">+</b><input data-pos="twoLeftPoints" inputmode="numeric" value="' + Math.abs(r.twoLeftPoints) + '"></label>' +
       '<label class="re-field"><span>Denda ceki (jika aturan ceki aktif)</span><b class="sign">+</b><input data-pos="cekiPenaltyPoints" inputmode="numeric" value="' + Math.abs(r.cekiPenaltyPoints) + '"></label>' +
-      '</section></div>';
+      '</section></div>' + extrasHTML(r);
+  }
+  // Table-specific additions on top of the platform rules: written "how to play" notes and named point items.
+  function extrasHTML(r) {
+    const notes = r.customNotes || [], cps = r.customPoints || [];
+    return '<section class="re-extra"><h4>Aturan Tambahan <small>(aturan dasar platform tetap berlaku)</small></h4>' +
+      '<div class="re-sub">Cara main tambahan · tampil di 📋 Aturan Meja</div>' +
+      notes.map((x, i) => '<div class="re-note"><input data-note-title="' + i + '" placeholder="Judul (mis. Kartu terakhir)" maxlength="40" value="' + esc(x.title || '') + '">' +
+        '<input data-note-text="' + i + '" placeholder="Penjelasan cara mainnya" maxlength="300" value="' + esc(x.text || '') + '">' +
+        '<button type="button" class="re-del" data-note-del="' + i + '" aria-label="Hapus">✕</button></div>').join('') +
+      (notes.length < 10 ? '<button type="button" class="btn ghost small dark" id="reAddNote">+ Tambah cara main</button>' : '') +
+      '<div class="re-sub">Poin tambahan · diberikan pembuat meja / host di layar hasil game</div>' +
+      cps.map((x, i) => '<div class="re-note re-cp"><input data-cp-name="' + i + '" placeholder="Nama poin (mis. Tutup pakai As)" maxlength="40" value="' + esc(x.name || '') + '">' +
+        '<select data-cp-sign="' + i + '"><option value="1"' + (x.points >= 0 ? ' selected' : '') + '>+ (denda)</option><option value="-1"' + (x.points < 0 ? ' selected' : '') + '>− (bonus)</option></select>' +
+        '<input data-cp-val="' + i + '" inputmode="numeric" placeholder="0" value="' + (x.points ? Math.abs(x.points) : '') + '">' +
+        '<button type="button" class="re-del" data-cp-del="' + i + '" aria-label="Hapus">✕</button></div>').join('') +
+      (cps.length < 10 ? '<button type="button" class="btn ghost small dark" id="reAddCp">+ Tambah poin</button>' : '') + '</section>';
+  }
+  // Raw (unfiltered) extra rows, so a freshly added empty row survives a re-render.
+  function readExtras() {
+    const box = $('#rulesEdit');
+    const v = (sel, i) => { const x = box.querySelector('[' + sel + '="' + i + '"]'); return x ? x.value : ''; };
+    const notes = [...box.querySelectorAll('[data-note-title]')].map((x) => ({ title: x.value, text: v('data-note-text', x.dataset.noteTitle) }));
+    const cps = [...box.querySelectorAll('[data-cp-name]')].map((x) => {
+      const i = x.dataset.cpName;
+      return { name: x.value, points: (parseInt(String(v('data-cp-val', i)).replace(/[^0-9]/g, ''), 10) || 0) * (+v('data-cp-sign', i) || 1) };
+    });
+    return { customNotes: notes, customPoints: cps };
   }
   function readEditor() {
     const box = $('#rulesEdit');
@@ -1517,10 +1579,11 @@
     const ups = [...box.querySelectorAll('input[data-tier-up]')].map((x) => n(x));
     const xs = [...box.querySelectorAll('input[data-tier-x]')].map((x) => n(x));
     r.tiers = xs.map((x, i) => ({ upTo: i < ups.length ? ups[i] : 13, x }));
+    Object.assign(r, readExtras());
     return R.normalizeRules(r);
   }
-  function fillEditor(rules) {
-    $('#reBody').innerHTML = editorBodyHTML(R.normalizeRules(rules));
+  function fillEditor(rules, extras) {
+    $('#reBody').innerHTML = editorBodyHTML({ ...R.normalizeRules(rules), ...(extras || {}) });
   }
   function presetOptions(selectedName) {
     return '<option value="default"' + (!selectedName || selectedName === 'Aturan Default' ? ' selected' : '') + '>Aturan Default</option>' +
@@ -1568,12 +1631,24 @@
       const prevUp = r.tiers.length > 1 ? r.tiers[r.tiers.length - 2].upTo : 0;
       if (prevUp >= 12) return toast('Tidak bisa menambah tingkat lagi', true);
       r.tiers.splice(r.tiers.length - 1, 0, { upTo: Math.min(12, prevUp + 1), x: last.x });
-      return fillEditor(r);
+      return fillEditor(r, readExtras());
+    }
+    if (t.id === 'reAddNote' || t.id === 'reAddCp' || t.dataset.noteDel != null || t.dataset.cpDel != null) {
+      const ex = readExtras();
+      if (t.id === 'reAddNote') ex.customNotes.push({ title: '', text: '' });
+      if (t.id === 'reAddCp') ex.customPoints.push({ name: '', points: 10 });
+      if (t.dataset.noteDel != null) ex.customNotes.splice(+t.dataset.noteDel, 1);
+      if (t.dataset.cpDel != null) ex.customPoints.splice(+t.dataset.cpDel, 1);
+      if (editor.name === 'Aturan Default') editor.name = 'Aturan Custom';
+      fillEditor(readEditor(), ex);
+      const added = t.id === 'reAddNote' ? '[data-note-title]' : t.id === 'reAddCp' ? '[data-cp-name]' : null;
+      if (added) { const all = $('#rulesEdit').querySelectorAll(added); const last = all[all.length - 1]; if (last) last.scrollIntoView({ block: 'center' }); }
+      return;
     }
     if (t.dataset.tierDel != null) {
       const r = readEditor();
       r.tiers.splice(+t.dataset.tierDel, 1);
-      return fillEditor(r);
+      return fillEditor(r, readExtras());
     }
     if (t.id === 'reDefault') { editor.name = 'Aturan Default'; fillEditor(R.DEFAULT_RULES); $('#rePreset').value = 'default'; syncPresetButtons(); return; }
     if (t.id === 'reDelPreset') {

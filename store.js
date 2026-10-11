@@ -61,6 +61,7 @@ const SCHEMA = [
   'create index if not exists game_players_user on game_players(user_id)',
   'create index if not exists match_players_user on match_players(user_id)',
   'create index if not exists games_match on games(match_id)',
+  'alter table games add column if not exists final_cards text', // JSON array: the winning (last) play
   // friendships: one row per pair, user_id = who sent the request; status 'pending' | 'accepted'
   `create table if not exists friendships (
     user_id integer not null references users(id) on delete cascade,
@@ -173,7 +174,8 @@ async function createMatch(roomCode, mult) {
 
 // game: { gameNo, winnerName, mult, rows: [{pkey, userId, name, points, left, detail, winner}], totals: [{pkey, userId, name, avatar, bot, score, wins, games}] }
 async function recordGame(matchId, game) {
-  const g = await one('insert into games (match_id, game_no, winner_name) values ($1, $2, $3) returning id', [matchId, game.gameNo, game.winnerName]);
+  const g = await one('insert into games (match_id, game_no, winner_name, final_cards) values ($1, $2, $3, $4) returning id',
+    [matchId, game.gameNo, game.winnerName, game.finalCards ? JSON.stringify(game.finalCards) : null]);
   for (const r of game.rows) {
     await q('insert into game_players (game_id, pkey, user_id, name, points, cards_left, detail, is_winner) values ($1,$2,$3,$4,$5,$6,$7,$8)',
       [g.id, r.pkey, r.userId || null, r.name, r.points, r.left, r.detail, !!r.winner]);
@@ -186,6 +188,13 @@ async function recordGame(matchId, game) {
       [matchId, t.pkey, t.userId || null, t.name, t.avatar, !!t.bot, t.score, t.wins, t.games]);
   }
   await q('update matches set games = $2, mult = $3 where id = $1', [matchId, game.gameNo, game.mult]);
+}
+
+// A house point item given by hand after a game: rewrite that player's game row and their session total.
+async function adjustGame(matchId, gameNo, pkey, points, detail, total) {
+  await q(`update game_players set points = $4, detail = $5
+           where pkey = $3 and game_id = (select id from games where match_id = $1 and game_no = $2)`, [matchId, gameNo, pkey, points, detail]);
+  await q('update match_players set total_points = $3 where match_id = $1 and pkey = $2', [matchId, pkey, total]);
 }
 
 // final: { mult, players: [{pkey, rank, net}] }
@@ -230,7 +239,8 @@ async function matchDetail(matchId, userId) {
   const match = await one('select id, room_code, mult, games, started_at, ended_at from matches where id = $1', [matchId]);
   const players = await q(`select name, avatar, is_bot, user_id, total_points, wins, final_rank, net_amount::float8 as net
                            from match_players where match_id = $1 order by total_points desc`, [matchId]);
-  const games = await q('select id, game_no, winner_name, played_at from games where match_id = $1 order by game_no', [matchId]);
+  const games = await q('select id, game_no, winner_name, played_at, final_cards from games where match_id = $1 order by game_no', [matchId]);
+  for (const g of games) { try { g.final_cards = g.final_cards ? JSON.parse(g.final_cards) : null; } catch { g.final_cards = null; } }
   const rows = await q(`select gp.game_id, gp.name, gp.points, gp.cards_left, gp.detail, gp.is_winner
                         from game_players gp join games g on g.id = gp.game_id where g.match_id = $1`, [matchId]);
   for (const g of games) g.rows = rows.filter((r) => r.game_id === g.id);
@@ -339,5 +349,5 @@ module.exports = {
   requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,
   init, kind: () => db && db.kind,
   findUserByUsername, createUser, updateUser, createSession, userByToken, deleteSession, setPassword, deleteOtherSessions,
-  createMatch, recordGame, finishMatch, stats, history, matchDetail,
+  createMatch, recordGame, finishMatch, adjustGame, stats, history, matchDetail,
 };
