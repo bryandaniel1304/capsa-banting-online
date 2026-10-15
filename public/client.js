@@ -189,6 +189,11 @@
   const num = (n) => Number(n).toLocaleString('id-ID');
   const pts = (n) => (n > 0 ? '+' : '') + n;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // avatars are an emoji, or a profile picture URL (/api/photo/<id>?v=...)
+  const isPhoto = (a) => typeof a === 'string' && a.startsWith('/api/photo/');
+  const avatarHTML = (a) => (isPhoto(a)
+    ? '<img class="ava-img" src="' + esc(a) + '" alt="" loading="lazy" draggable="false" onerror="this.replaceWith(\'🙂\')">'
+    : esc(a || ''));
   function cardHTML(c, extra = '') {
     const red = R.isRed(c) ? ' red' : '';
     const s = R.SUITS[R.suitOf(c)];
@@ -448,7 +453,7 @@
     $('#home').classList.toggle('guest', !logged);
     if (!logged) return;
     const paint = () => {
-      $('#avatarBtn').textContent = me.user.avatar;
+      $('#avatarBtn').innerHTML = avatarHTML(me.user.avatar);
       $('#meName').textContent = me.user.name;
       $('#meUser').textContent = '@' + me.user.username;
       if (me.stats) { $('#meStats').innerHTML = statsHTML(me.stats); requestAnimationFrame(() => fitText($('#meStats'))); }
@@ -555,16 +560,48 @@
     if (!(m >= 1 && m <= 1000000)) { toast('Pengali tidak valid', true); return 0; }
     return m;
   }
-  $('#avatarPicker').innerHTML = AVATARS.map((a) => '<button data-a="' + a + '">' + a + '</button>').join('');
-  $('#avatarBtn').onclick = () => {
-    $('#avatarPicker').classList.toggle('hidden');
-    [...$('#avatarPicker').children].forEach((b) => b.classList.toggle('on', me.user && b.dataset.a === me.user.avatar));
-  };
+  // Avatar: an emoji, or a picture from the phone's gallery (cropped square and shrunk on the phone before upload).
+  function renderPicker() {
+    $('#avatarPicker').innerHTML = '<button class="pick-photo" data-photo="1">📷 ' + (me.user && isPhoto(me.user.avatar) ? 'Ganti Foto dari Galeri' : 'Pilih Foto dari Galeri') + '</button>' +
+      AVATARS.map((a) => '<button data-a="' + a + '" class="' + (me.user && a === me.user.avatar ? 'on' : '') + '">' + a + '</button>').join('');
+  }
+  function setMeUser(u) { me.user = u; $('#avatarBtn').innerHTML = avatarHTML(u.avatar); }
+  $('#avatarBtn').onclick = () => { renderPicker(); $('#avatarPicker').classList.toggle('hidden'); };
   $('#avatarPicker').onclick = async (e) => {
     const a = e.target.closest('button'); if (!a || !me.user) return;
+    if (a.dataset.photo) return $('#photoInput').click(); // opens the gallery / camera picker
     $('#avatarPicker').classList.add('hidden');
-    try { const d = await api('/me', { method: 'PATCH', body: { avatar: a.dataset.a } }); me.user = d.user; $('#avatarBtn').textContent = d.user.avatar; }
+    try { const d = await api('/me', { method: 'PATCH', body: { avatar: a.dataset.a } }); setMeUser(d.user); }
     catch (err) { toast(err.message, true); }
+  };
+  async function photoDataURL(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+      const S = 192, w = img.naturalWidth, h = img.naturalHeight, side = Math.min(w, h);
+      const c = document.createElement('canvas'); c.width = c.height = S;
+      const g = c.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, S, S); // centre square
+      let q = 0.85, out = c.toDataURL('image/jpeg', q);
+      while (out.length > 150000 && q > 0.4) { q -= 0.15; out = c.toDataURL('image/jpeg', q); }
+      return out;
+    } finally { URL.revokeObjectURL(url); }
+  }
+  $('#photoInput').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ''; // picking the same file again still triggers a change
+    if (!file || !me.user) return;
+    $('#avatarPicker').classList.add('hidden');
+    loading('Mengunggah foto…');
+    try {
+      let image;
+      try { image = await photoDataURL(file); } catch { throw new Error('Foto ini tidak bisa dibuka. Coba foto lain (JPG / PNG).'); }
+      const d = await api('/me/photo', { method: 'POST', body: { image } });
+      setMeUser(d.user);
+      toast('📷 Foto profil diperbarui');
+    } catch (err) { toast(err.message, true); }
+    finally { loaded(); }
   };
   $('#tiers').onclick = async (e) => {
     const t = e.target.closest('.tier'); if (!t || needLogin()) return;
@@ -642,7 +679,7 @@
     const showCount = playing && p.inGame && !isMe;
     const kick = V.host === V.you && !isMe && !playing ? '<div class="seat-acts"><button data-kick="' + seat + '">Keluarkan</button></div>' : '';
     el.innerHTML =
-      '<div class="ava-wrap"><div class="ring"></div><div class="avatar">' + esc(p.avatar) + '</div>' +
+      '<div class="ava-wrap"><div class="ring"></div><div class="avatar">' + avatarHTML(p.avatar) + '</div>' +
       (p.voice ? '<div class="vbadge' + (p.muted ? ' muted' : '') + '">' + (p.muted ? '🔇' : '🎙️') + '</div>' : '') +
       (p.passed ? '<div class="passhand">✋</div>' : '') +
       '<div class="tags">' + tags.join('') + '</div></div>' +
@@ -976,7 +1013,7 @@
       (r.final ? '<div class="final-play"><div class="fp-lbl">Kartu penutup</div>' + finalHTML(r.final.cards, r.final.name) + '</div>' : '') + '</div>' +
       '<div class="result-rows"><div class="rrow rhead"><span></span><span>Pemain</span><span>Sisa kartu</span><span>Game ini</span><span>Total</span></div>' +
       r.rows.map((row) =>
-        '<div class="rrow' + (row.winner ? ' win' : '') + '"><div class="avatar">' + esc(row.avatar) + '</div>' +
+        '<div class="rrow' + (row.winner ? ' win' : '') + '"><div class="avatar">' + avatarHTML(row.avatar) + '</div>' +
         '<div><div class="rn">' + esc(row.name) + (row.seat === V.you ? ' (kamu)' : '') + (row.winner ? ' 🏆' : '') + '</div><div class="rl">' +
         row.items.map((i) => (i.manual ? '<span class="man">✍️ ' + esc(i.label) + ' ' + pts(i.points) +
           (canAdjust ? '<button class="man-x" data-unadj="' + row.seat + '" data-id="' + esc(i.id) + '" aria-label="Batalkan">✕</button>' : '') + '</span>'
@@ -1110,7 +1147,7 @@
 
     // 1) ranking
     const ranking = '<h4>Peringkat (' + f.games + ' game) · semakin rendah poin semakin bagus</h4><div class="tbl-wrap"><table class="hist"><tr><th>#</th><th>Pemain</th><th>Total poin</th><th>Menang</th><th>Bersih</th></tr>' +
-      P.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(p.avatar) + ' ' + esc(p.name) + (p.gone ? ' <span class="muted">(keluar)</span>' : '') + '</td><td class="' + (p.score <= 0 ? 'good' : 'bad') + '">' + pts(p.score) + '</td><td>' + p.wins + '</td><td class="' + (p.net >= 0 ? 'good' : 'bad') + '"><b>' + money(p.net) + '</b></td></tr>').join('') + '</table></div>';
+      P.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + avatarHTML(p.avatar) + ' ' + esc(p.name) + (p.gone ? ' <span class="muted">(keluar)</span>' : '') + '</td><td class="' + (p.score <= 0 ? 'good' : 'bad') + '">' + pts(p.score) + '</td><td>' + p.wins + '</td><td class="' + (p.net >= 0 ? 'good' : 'bad') + '"><b>' + money(p.net) + '</b></td></tr>').join('') + '</table></div>';
 
     // 2) every pair: points difference x multiplier
     const pairs = '<h4>Selisih Poin per Pasangan</h4><div class="pays">' + f.pays.map((x) =>
@@ -1122,7 +1159,7 @@
     const perPlayer = '<h4>Rincian per Pemain</h4><div class="per-player">' + P.map((p) => {
       const out = f.pays.filter((x) => x.from === p.name && x.amount > 0);
       const inc = f.pays.filter((x) => x.to === p.name && x.amount > 0);
-      return '<div class="pp"><div class="pp-name">' + esc(p.avatar) + ' ' + esc(p.name) + ' <span class="muted">(' + pts(p.score) + ' poin)</span></div>' +
+      return '<div class="pp"><div class="pp-name">' + avatarHTML(p.avatar) + ' ' + esc(p.name) + ' <span class="muted">(' + pts(p.score) + ' poin)</span></div>' +
         (out.length ? out.map((x) => '<div class="pp-line bad">Bayar ke ' + esc(x.to) + ': ' + x.diff + ' × ' + num(f.mult) + ' = −' + num(x.amount) + '</div>').join('') : '') +
         (inc.length ? inc.map((x) => '<div class="pp-line good">Terima dari ' + esc(x.from) + ': ' + x.diff + ' × ' + num(f.mult) + ' = +' + num(x.amount) + '</div>').join('') : '') +
         (!out.length && !inc.length ? '<div class="pp-line muted">Tidak ada pembayaran</div>' : '') +
@@ -1153,7 +1190,7 @@
     return '<div class="mcard"><div class="mhead"><b>' + d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) + '</b> · Meja ' + esc(m.room_code) +
       ' · x' + num(m.mult) + ' · ' + m.games + ' game · <span class="' + (m.ended_at ? 'good' : 'muted') + '">' + (m.ended_at ? 'Selesai' : 'Belum diakhiri') + '</span></div>' +
       '<div class="mplayers">' + (m.players || []).map((p) => '<span class="mp' + (me.user && p.user_id === me.user.id ? ' me' : '') + '">' +
-        esc(p.avatar || '') + ' ' + esc(p.name) + (p.is_bot ? ' 🤖' : '') + ' <b class="' + (p.total_points <= 0 ? 'good' : 'bad') + '">' + pts(p.total_points) + '</b>' +
+        avatarHTML(p.avatar || '') + ' ' + esc(p.name) + (p.is_bot ? ' 🤖' : '') + ' <b class="' + (p.total_points <= 0 ? 'good' : 'bad') + '">' + pts(p.total_points) + '</b>' +
         (p.final_rank ? ' #' + p.final_rank : '') + (p.net != null ? ' · ' + (p.net > 0 ? '+' : '') + num(p.net) : '') + '</span>').join('') + '</div>' +
       '<button class="btn ghost small dark" data-match="' + m.id + '">Detail per game</button><div class="mdetail hidden"></div></div>';
   }
@@ -1216,7 +1253,7 @@
       const [d, h] = await Promise.all([api('/me'), api('/history')]);
       setTimeout(() => fitText(body), 0);
       body.innerHTML = '<div class="me-stats wide">' + statsHTML(d.stats) + '</div>' +
-        '<h4>Teman Main</h4>' + (h.friends.length ? '<div class="friends">' + h.friends.map((f) => '<span class="friend">' + esc(f.avatar || '') + ' ' + esc(f.name) + ' <small>' + f.matches + ' sesi · ' + f.games + ' game</small></span>').join('') + '</div>' : '<p class="muted">Belum ada teman main.</p>') +
+        '<h4>Teman Main</h4>' + (h.friends.length ? '<div class="friends">' + h.friends.map((f) => '<span class="friend">' + avatarHTML(f.avatar || '') + ' ' + esc(f.name) + ' <small>' + f.matches + ' sesi · ' + f.games + ' game</small></span>').join('') + '</div>' : '<p class="muted">Belum ada teman main.</p>') +
         '<h4>Sesi Bermain</h4>' + (h.matches.length ? h.matches.map(matchCard).join('') : '<p class="muted">Belum ada sesi. Ayo main!</p>');
       body.querySelectorAll('[data-match]').forEach((b) => (b.onclick = () => toggleMatch(b)));
     } catch (e) { body.innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }
@@ -1573,7 +1610,7 @@
     return '<span class="st-on">🟢 Online</span>';
   }
   function friendRow(f, actions) {
-    return '<div class="frow"><div class="avatar fav">' + esc(f.avatar) + '</div><div class="finfo"><div class="fname">' + esc(f.name) + ' <small>@' + esc(f.username) + '</small></div>' +
+    return '<div class="frow"><div class="avatar fav">' + avatarHTML(f.avatar) + '</div><div class="finfo"><div class="fname">' + esc(f.name) + ' <small>@' + esc(f.username) + '</small></div>' +
       (f.presence ? '<div class="fstatus">' + statusText(f.presence) + '</div>' : '') + '</div><div class="facts">' + actions + '</div></div>';
   }
   // Players online right now (anyone, not only friends): invite them to my table or add them as friends.
@@ -1704,7 +1741,7 @@
   function renderDmHeader() {
     const f = F.friends.find((x) => x.id === dmWith);
     const h = $('#dm .dm-head');
-    if (h && f) h.innerHTML = '<button class="dm-back" aria-label="Kembali">‹</button><div class="avatar fav">' + esc(f.avatar) + '</div><div><div class="fname">' + esc(f.name) + '</div><div class="fstatus">' + statusText(f.presence) + '</div></div>';
+    if (h && f) h.innerHTML = '<button class="dm-back" aria-label="Kembali">‹</button><div class="avatar fav">' + avatarHTML(f.avatar) + '</div><div><div class="fname">' + esc(f.name) + '</div><div class="fstatus">' + statusText(f.presence) + '</div></div>';
   }
   function renderDmList() {
     const list = $('#dmList'); if (!list) return;
@@ -1762,7 +1799,7 @@
   async function openProfile(seat) {
     const p = V.seats[seat];
     const el = $('#profile');
-    const head = '<div class="prof-head"><div class="avatar prof-av">' + esc(p.avatar) + '</div><div><div class="prof-name">' + esc(p.name) + '</div><div class="prof-sub" id="profSub">' + (p.bot ? 'Bot komputer' : 'Memuat…') + '</div></div></div>' +
+    const head = '<div class="prof-head"><div class="avatar prof-av">' + avatarHTML(p.avatar) + '</div><div><div class="prof-name">' + esc(p.name) + '</div><div class="prof-sub" id="profSub">' + (p.bot ? 'Bot komputer' : 'Memuat…') + '</div></div></div>' +
       '<div class="prof-table">Di meja ini: <b>' + pts(p.score || 0) + ' poin</b> · ' + (p.wins || 0) + ' menang dari ' + (p.games || 0) + ' game</div>';
     el.innerHTML = '<div class="dialog prof-box"><button class="x prof-x" aria-label="Tutup">✕</button>' + head + '<div id="profBody">' + (p.bot ? '<p class="muted">Bot tidak punya akun.</p>' : '') + '</div></div>';
     el.classList.remove('hidden');
@@ -2062,7 +2099,7 @@
   }
   document.addEventListener('focusin', (e) => {
     const t = e.target;
-    if (!touch || tsTarget || !(t instanceof HTMLInputElement) || !stage.contains(t) || t.readOnly) return;
+    if (!touch || tsTarget || !(t instanceof HTMLInputElement) || !stage.contains(t) || t.readOnly || t.type === 'file') return;
     openTypeSheet(t);
   });
 

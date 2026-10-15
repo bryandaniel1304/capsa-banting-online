@@ -160,6 +160,8 @@
 </div>
 <!-- outside the (possibly rotated) stage: follows the real device orientation, pinned above the keyboard -->
 <div id="typeSheet" class="type-sheet hidden"></div>
+<!-- profile picture from the gallery (outside the stage so the typing bar never grabs it) -->
+<input type="file" id="photoInput" accept="image/*" hidden>
 <script src="/socket.io/socket.io.js"></script>
 <script src="rules.js"></script>
 <script src="client.js"></script>

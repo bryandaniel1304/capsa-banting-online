@@ -79,6 +79,11 @@ input, select { font-family: inherit; }
 .avatar-picker { display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.2); background: rgba(0,0,0,.4); border: 1px solid var(--line-soft); padding: calc(var(--u) * 1.6); border-radius: calc(var(--u) * 2.4); }
 .avatar-picker button { font-size: calc(var(--u) * 6); background: rgba(255,255,255,.06); border-radius: 50%; width: calc(var(--u) * 10); height: calc(var(--u) * 10); }
 .avatar-picker button.on { background: rgba(216,180,90,.35); box-shadow: 0 0 0 2px var(--gold); }
+.avatar-picker .pick-photo { width: 100%; height: auto; border-radius: 99px; font-size: calc(var(--u) * 3.3); font-weight: 700; color: var(--gold-hi); padding: calc(var(--u) * 1.4); border: 1px solid var(--line); background: rgba(216,180,90,.12); }
+/* profile pictures: round, cropped; inline (next to a name) or filling an avatar circle */
+.ava-img { width: 1.3em; height: 1.3em; border-radius: 50%; object-fit: cover; vertical-align: -0.3em; -webkit-user-drag: none; }
+.avatar { overflow: hidden; }
+.avatar .ava-img, #avatarBtn .ava-img { width: 100%; height: 100%; display: block; vertical-align: top; }
 .me-stats { display: flex; gap: calc(var(--u) * 1); }
 .me-stats .st { flex: 1; min-width: 0; background: var(--tile); border: 1px solid var(--line-soft); border-radius: calc(var(--u) * 1.6); text-align: center; padding: calc(var(--u) * .7) 0; line-height: 1.15; }
 .me-stats .st b { display: block; font-size: calc(var(--u) * 3.9); color: var(--gold-hi); white-space: nowrap; overflow: hidden; padding: 0 calc(var(--u) * .8); }

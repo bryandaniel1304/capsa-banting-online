@@ -82,6 +82,7 @@ until the round ends, 2♠ plays again, dragon, *flush containing a 2 beats flus
 Tap a player at the table to see their profile and stats, and add them as a friend (or accept / chat).
 
 ## Friends, chat, invites & voice
+- **Profile picture:** tap your avatar on the home screen and pick an emoji or **📷 Pilih Foto dari Galeri**. The phone crops it square and shrinks it (192×192 JPEG, a few KB) before uploading; it shows at tables, in friends / online lists, history and profiles. Picking an emoji removes the photo.
 - **Friends:** add by username (the other player accepts), remove anytime. Friends show live status: online, at a table, playing, or offline.
 - **Invite:** from the 👥 Teman panel, invite an online friend, or anyone online in the **🌐 Pemain Online** tab (and add them as a friend), to your current table; they get a Gabung / Nanti popup.
 - **Direct chat:** private messages between friends, saved in the database, delivered live with unread badges.

@@ -20,7 +20,7 @@ const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻',
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api', accounts.router({ presenceOf: (id) => presenceOf(id), emitToUser: (id, ev, data) => emitToUser(id, ev, data) }));
+app.use('/api', accounts.router({ presenceOf: (id) => presenceOf(id), emitToUser: (id, ev, data) => emitToUser(id, ev, data), onProfile: (u) => profileChanged(u) }));
 app.get('/rules.js', (_, res) => res.sendFile(path.join(__dirname, 'shared', 'rules.js')));
 app.get('/healthz', (_, res) => res.send('ok'));
 const server = http.createServer(app);
@@ -48,6 +48,14 @@ function notifyPresence(userId) {
       ids.forEach((f) => emitToUser(f, 'presence', pr));
     } catch (e) { console.error('presence', e.message); }
   }, 300));
+}
+// A player changed their name / picture: show it right away at their table and in the online list.
+function profileChanged(u) {
+  if (!u) return;
+  for (const s of io.of('/').sockets.values()) if (s.data.user && s.data.user.id === u.id) Object.assign(s.data.user, { name: u.name, avatar: u.avatar });
+  const room = rooms.get(tokenRoom.get('u:' + u.id));
+  const p = room && room.seats[seatOf(room, 'u:' + u.id)];
+  if (p) { p.avatar = u.avatar; p.name = clean(u.name, 14) || p.name; broadcast(room); }
 }
 const roomPresence = (room) => room.seats.forEach((p) => p && p.userId && !p.bot && notifyPresence(p.userId));
 const lastInvite = new Map();
@@ -693,8 +701,10 @@ io.on('connection', (socket) => {
   const roomOf = () => { const c = token && tokenRoom.get(token); return c ? rooms.get(c) : null; };
   const fail = (msg) => socket.emit('toast', { msg, error: true });
   const ack = (cb, v) => typeof cb === 'function' && cb(v);
+  // the profile can change after login (name / picture): socket.data.user is kept up to date by profileChanged()
+  const prof = () => socket.data.user || user;
   const newPlayer = () => ({
-    token, userId: user.id, name: clean(user.name, 14) || user.username, avatar: user.avatar || '🦊', bot: false,
+    token, userId: user.id, name: clean(prof().name, 14) || user.username, avatar: prof().avatar || '🦊', bot: false,
   });
 
   function attach(room, p) {
@@ -783,7 +793,7 @@ io.on('connection', (socket) => {
       inviteLog.set(user.id, [...mine, now]);
       lastInvite.set(k, now);
       emitToUser(fid, 'invite', {
-        from: { id: user.id, name: user.name, username: user.username, avatar: user.avatar }, friend,
+        from: { id: user.id, name: prof().name, username: user.username, avatar: prof().avatar }, friend,
         room: room.code, mult: room.mult, players: room.seats.filter(Boolean).length, state: room.state,
       });
       ack(cb, { ok: true });

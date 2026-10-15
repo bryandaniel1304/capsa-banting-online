@@ -90,6 +90,13 @@ const SCHEMA = [
     created_at timestamptz not null default now(),
     unique (user_id, name)
   )`,
+  // profile pictures chosen from the phone's gallery (small square JPEG/PNG/WebP, base64)
+  `create table if not exists user_photos (
+    user_id integer primary key references users(id) on delete cascade,
+    mime text not null,
+    data text not null,
+    updated_at timestamptz not null default now()
+  )`,
   // live tables, so games survive server restarts / deploys / sleeping instances
   `create table if not exists live_rooms (
     code text primary key,
@@ -343,7 +350,19 @@ async function liveRoomForPlayer(token) {
 }
 async function pruneLiveRooms() { await q("delete from live_rooms where updated_at < now() - interval '24 hours'"); }
 
+// ---------- profile pictures ----------
+// The photo itself lives in user_photos; users.avatar then holds its versioned URL (or an emoji when there's none).
+async function savePhoto(userId, mime, b64) {
+  await q(`insert into user_photos (user_id, mime, data, updated_at) values ($1, $2, $3, now())
+           on conflict (user_id) do update set mime = excluded.mime, data = excluded.data, updated_at = now()`, [userId, mime, b64]);
+  const url = '/api/photo/' + userId + '?v=' + Date.now().toString(36);
+  return one('update users set avatar = $2 where id = $1 returning id, username, name, avatar', [userId, url]);
+}
+async function getPhoto(userId) { return one('select mime, data from user_photos where user_id = $1', [userId]); }
+async function deletePhoto(userId) { await q('delete from user_photos where user_id = $1', [userId]); }
+
 module.exports = {
+  savePhoto, getPhoto, deletePhoto,
   publicUser, relation, listPresets, countPresets, savePreset, deletePreset,
   saveLiveRoom, deleteLiveRoom, liveRoomByCode, liveRoomForPlayer, pruneLiveRooms,
   requestFriend, acceptFriend, removeFriend, areFriends, friendIds, listFriends, addMessage, messages, markRead,

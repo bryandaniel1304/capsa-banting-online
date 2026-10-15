@@ -71,8 +71,10 @@ const cleanName = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 14
 function router(hooks = {}) {
   const presenceOf = hooks.presenceOf || (() => ({ online: false }));
   const emitToUser = hooks.emitToUser || (() => {});
+  const onProfile = hooks.onProfile || (() => {}); // name / avatar changed: refresh live tables
   const r = express.Router();
-  r.use(express.json({ limit: '10kb' }));
+  const small = express.json({ limit: '10kb' });
+  r.use((req, res, next) => (req.path === '/me/photo' ? next() : small(req, res, next))); // photos get their own limit
 
   const auth = async (req, res, next) => {
     try {
@@ -123,8 +125,35 @@ function router(hooks = {}) {
   r.patch('/me', auth, async (req, res, next) => {
     try {
       const { name, avatar } = req.body || {};
-      const user = await store.updateUser(req.user.id, { name: cleanName(name) || null, avatar: AVATARS.includes(avatar) ? avatar : null });
+      const emoji = AVATARS.includes(avatar) ? avatar : null;
+      if (emoji) await store.deletePhoto(req.user.id); // picking an emoji replaces the photo
+      const user = await store.updateUser(req.user.id, { name: cleanName(name) || null, avatar: emoji });
+      onProfile(user);
       res.json({ user });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- profile picture from the gallery ----------
+  // The phone crops and shrinks the picture first (about 15 KB); the server only checks it really is an image.
+  const MAGIC = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47], 'image/webp': [0x52, 0x49, 0x46, 0x46] };
+  r.post('/me/photo', express.json({ limit: '400kb' }), auth, async (req, res, next) => {
+    try {
+      const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String((req.body || {}).image || ''));
+      if (!m) return res.status(400).json({ error: 'Format foto tidak didukung (pakai JPG / PNG / WebP)' });
+      const buf = Buffer.from(m[2], 'base64');
+      if (buf.length < 100 || buf.length > 250 * 1024) return res.status(400).json({ error: 'Ukuran foto tidak valid' });
+      if (!MAGIC[m[1]].every((b, i) => buf[i] === b)) return res.status(400).json({ error: 'File bukan gambar' });
+      const user = await store.savePhoto(req.user.id, m[1], buf.toString('base64'));
+      onProfile(user);
+      res.json({ user });
+    } catch (e) { next(e); }
+  });
+  r.get('/photo/:id', async (req, res, next) => {
+    try {
+      const ph = await store.getPhoto(parseInt(req.params.id, 10) || 0);
+      if (!ph) return res.status(404).end();
+      res.set({ 'Content-Type': ph.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      res.send(Buffer.from(ph.data, 'base64')); // the URL carries a version, so it can be cached for good
     } catch (e) { next(e); }
   });
 
@@ -274,6 +303,8 @@ function router(hooks = {}) {
   });
 
   r.use((err, req, res, _next) => {
+    if (err && err.type === 'entity.too.large') return res.status(413).json({ error: req.path === '/me/photo' ? 'Foto terlalu besar' : 'Data terlalu besar' });
+    if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Data tidak valid' });
     console.error('api error', err);
     res.status(500).json({ error: 'Terjadi kesalahan server' });
   });
