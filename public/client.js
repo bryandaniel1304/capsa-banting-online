@@ -1278,7 +1278,9 @@
     const i = insets();
     $('#deviceInfo').textContent = (device.type === 'desktop' ? '💻 ' : '📱 ') + ({ ios: 'iOS', android: 'Android', windows: 'Windows', mac: 'macOS', linux: 'Linux' }[device.os] || 'Perangkat') + ' · ' +
       ({ phone: 'HP', tablet: 'Tablet', desktop: 'Komputer' }[device.type]) + ' · ' + window.innerWidth + '×' + window.innerHeight + ' @' + (+device.dpr.toFixed(2)) + 'x' +
-      (i.t || i.r || i.b || i.l ? ' · notch ' + [i.t, i.r, i.b, i.l].map(Math.round).join('/') : '') + (device.standalone ? ' · app' : '') + (device.lite ? ' · mode ringan' : '');
+      (i.t || i.r || i.b || i.l ? ' · notch ' + [i.t, i.r, i.b, i.l].map(Math.round).join('/') : '') + (device.standalone ? ' · app' : '') + (device.lite ? ' · mode ringan' : '') +
+      (voice.turn == null ? '' : voice.turn ? ' · voice: TURN ✓' : ' · voice: tanpa TURN') +
+      (voice.on ? ' · ' + [...voice.peers.entries()].map(([s, pc]) => nameOf(s) + ' ' + ({ connected: '✓', connecting: '…', new: '…', failed: '✗', disconnected: '!' }[pc.connectionState] || pc.connectionState)).join(', ') : '');
   });
   if (device.inApp) setTimeout(() => toast('Tips: buka di Chrome / Safari supaya voice chat & layar penuh berjalan lancar'), 2500);
   $('#fsBtn').onclick = () => {
@@ -1365,10 +1367,13 @@
   $('#rules').addEventListener('click', (e) => { if (e.target.id === 'rulesClose' || e.target.id === 'rules') $('#rules').classList.add('hidden'); });
 
   // ---------- voice chat (WebRTC mesh between the players at the table) ----------
-  const voice = { on: false, muted: false, stream: null, peers: new Map(), ice: null, ctx: null, meters: new Map() };
+  const voice = { on: false, muted: false, stream: null, peers: new Map(), ice: null, turn: null, ctx: null, meters: new Map(), retries: new Map(), needTap: false };
   const nameOf = (seat) => (V && V.seats[seat] ? V.seats[seat].name : 'pemain');
   async function iceServers() {
-    if (!voice.ice) { try { voice.ice = (await api('/ice')).iceServers; } catch { voice.ice = [{ urls: 'stun:stun.l.google.com:19302' }]; } }
+    if (!voice.ice) {
+      try { const d = await api('/ice'); voice.ice = d.iceServers; voice.turn = !!d.turn; }
+      catch { voice.ice = [{ urls: 'stun:stun.l.google.com:19302' }]; voice.turn = false; }
+    }
     return voice.ice;
   }
   function renderVoiceBtn() {
@@ -1380,6 +1385,8 @@
   }
   async function voiceJoin() {
     if (!V) return;
+    if (!window.isSecureContext) return toast('Voice chat butuh alamat https:// (buka lewat link online, bukan alamat IP)', true);
+    if (device.inApp) toast('Voice sering diblokir di browser aplikasi (WhatsApp/Instagram). Buka di Chrome / Safari jika tidak bisa.');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.RTCPeerConnection) return toast('Browser ini tidak mendukung voice chat', true);
     try {
       voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
@@ -1400,7 +1407,7 @@
     for (const seat of [...voice.peers.keys()]) closePeer(seat);
     if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
     voice.stream = null; voice.on = false; voice.muted = false;
-    voice.meters.clear();
+    voice.meters.clear(); voice.retries.clear();
     if (!silent) socket.emit('voice:leave');
     renderVoiceBtn();
   }
@@ -1426,17 +1433,42 @@
     pc.ontrack = (e) => {
       let a = document.getElementById('va' + seat);
       if (!a) { a = document.createElement('audio'); a.id = 'va' + seat; a.autoplay = true; a.setAttribute('playsinline', ''); document.body.appendChild(a); }
-      a.srcObject = e.streams[0];
-      a.play().catch(() => toast('Ketuk layar untuk mendengar voice', true));
-      meter(seat, e.streams[0]);
+      a.srcObject = e.streams[0] || new MediaStream([e.track]);
+      a.muted = false;
+      playVoice(a);
+      meter(seat, a.srcObject);
     };
-    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') toast('Voice ke ' + nameOf(seat) + ' gagal tersambung (jaringan)', true); };
+    pc.onconnectionstatechange = () => {
+      if (voice.peers.get(seat) !== pc) return; // replaced by a newer connection
+      if (pc.connectionState === 'connected') {
+        voice.retries.delete(seat);
+        toast('🔊 Voice tersambung dengan ' + nameOf(seat));
+      } else if (pc.connectionState === 'failed') {
+        // the caller tries again with a fresh connection (twice), then we give up with a clear reason
+        const n = voice.retries.get(seat) || 0;
+        if (pc.caller && n < 2) { voice.retries.set(seat, n + 1); setTimeout(() => voice.on && voice.peers.get(seat) === pc && callPeer(seat).catch(() => {}), 1000); return; }
+        if (pc.caller || n >= 2) toast('Voice ke ' + nameOf(seat) + ' gagal tersambung.' + (voice.turn ? ' Coba matikan lalu nyalakan voice lagi.' : ' Jaringan seluler biasanya butuh server TURN (belum diatur di server).'), true);
+      }
+    };
     voice.peers.set(seat, pc);
     return pc;
   }
+  // Phones block audio that starts without a tap: retry on the next tap anywhere.
+  function playVoice(a) {
+    a.play().then(() => { voice.needTap = false; }).catch(() => {
+      if (!voice.needTap) toast('🔈 Ketuk layar sekali untuk mendengar voice', true);
+      voice.needTap = true;
+    });
+  }
+  window.addEventListener('pointerdown', () => {
+    if (voice.ctx && voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => {});
+    if (!voice.needTap) return;
+    document.querySelectorAll('audio[id^="va"]').forEach((a) => a.paused && playVoice(a));
+  }, true);
   async function flushCandidates(pc) { for (const c of pc.pending.splice(0)) await pc.addIceCandidate(c).catch(() => {}); }
   async function callPeer(seat) {
     const pc = makePeer(seat);
+    pc.caller = true;
     await pc.setLocalDescription(await pc.createOffer());
     socket.emit('voice:signal', { to: seat, data: { sdp: pc.localDescription } });
   }

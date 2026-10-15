@@ -87,8 +87,13 @@ Tap a player at the table to see their profile and stats, and add them as a frie
 - **Direct chat:** private messages between friends, saved in the database, delivered live with unread badges.
 - **Table reactions:** type any message (up to 80 chars) or pick a quick phrase.
 - **Voice chat:** tap 🎤 at the table to join, tap again to mute. Peer-to-peer WebRTC; the server only relays signaling.
-  STUN is used by default. Some mobile networks need a TURN relay. Set `ICE_SERVERS` to a JSON array of ICE servers
-  (e.g. from a TURN provider) to enable it.
+  STUN alone only works when the players' networks allow a direct link (often the same Wi-Fi). On mobile data
+  (carrier NAT) voice needs a **TURN relay**. Set one of these on the server (Render → Environment):
+  - **Metered** (free tier): `METERED_DOMAIN` (e.g. `yourapp.metered.live`) + `METERED_API_KEY`
+  - **Cloudflare** (free tier): `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN`
+  - or `ICE_SERVERS`: a JSON array of ICE servers from any TURN provider
+  The table menu shows `voice: TURN ✓` once it's active, plus each voice connection's state.
+  Voice needs `https://` (not a LAN IP address) and works best in Chrome / Safari rather than in-app browsers.
 - **Arrange cards:** press and slide a card sideways to move it; tap to select; ⇅ auto-sorts by rank / suit.
 
 ## Project layout

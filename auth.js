@@ -20,6 +20,39 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(expected, actual);
 }
 
+// ---------- TURN / STUN servers for voice chat ----------
+const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+const hasTurn = (list) => list.some((s) => [].concat(s.urls || s.url || []).some((u) => /^turns?:/.test(u)));
+let iceCache = null; // { at, value }
+async function iceConfig() {
+  if (iceCache && Date.now() - iceCache.at < 30 * 60000) return iceCache.value; // TURN credentials are short-lived
+  let list = null, source = 'stun';
+  try {
+    if (process.env.ICE_SERVERS) {
+      list = JSON.parse(process.env.ICE_SERVERS); source = 'ICE_SERVERS';
+    } else if (process.env.METERED_DOMAIN && process.env.METERED_API_KEY) {
+      const domain = process.env.METERED_DOMAIN.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const r = await fetch('https://' + domain + '/api/v1/turn/credentials?apiKey=' + encodeURIComponent(process.env.METERED_API_KEY), { signal: AbortSignal.timeout(6000) });
+      if (!r.ok) throw new Error('Metered ' + r.status);
+      list = await r.json(); source = 'metered';
+    } else if (process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) {
+      const r = await fetch('https://rtc.live.cloudflare.com/v1/turn/keys/' + process.env.CF_TURN_KEY_ID + '/credentials/generate', {
+        method: 'POST', signal: AbortSignal.timeout(6000),
+        headers: { Authorization: 'Bearer ' + process.env.CF_TURN_API_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttl: 86400 }),
+      });
+      if (!r.ok) throw new Error('Cloudflare TURN ' + r.status);
+      const d = await r.json();
+      list = Array.isArray(d.iceServers) ? d.iceServers : [d.iceServers]; source = 'cloudflare';
+    }
+  } catch (e) { console.error('TURN config:', e.message); list = null; source = 'error'; }
+  if (!Array.isArray(list) || !list.length) { list = []; if (source !== 'error') source = 'stun'; }
+  const value = { iceServers: [...STUN, ...list], turn: hasTurn(list), source };
+  iceCache = { at: source === 'error' ? Date.now() - 29 * 60000 : Date.now(), value }; // retry a failed provider after a minute
+  if (source !== 'stun' && !value.turn) console.error('TURN config: no turn: urls in', source);
+  return value;
+}
+
 // simple per-IP throttle for login/signup attempts
 const attempts = new Map();
 function throttled(ip) {
@@ -232,11 +265,12 @@ function router(hooks = {}) {
     try { await store.deletePreset(req.user.id, idParam(req)); res.json({ ok: true }); } catch (e) { next(e); }
   });
 
-  // ---------- voice chat ICE servers (STUN by default; set ICE_SERVERS to a JSON array to add TURN) ----------
-  r.get('/ice', (req, res) => {
-    let servers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
-    try { if (process.env.ICE_SERVERS) servers = JSON.parse(process.env.ICE_SERVERS); } catch { console.error('Invalid ICE_SERVERS'); }
-    res.json({ iceServers: servers });
+  // ---------- voice chat ICE servers ----------
+  // STUN alone only connects players whose networks allow a direct link; on mobile data (carrier NAT) voice
+  // needs a TURN relay. Configure one of: ICE_SERVERS (JSON array), Metered (METERED_DOMAIN + METERED_API_KEY)
+  // or Cloudflare (CF_TURN_KEY_ID + CF_TURN_API_TOKEN). Signed-in players only, so relay credentials aren't public.
+  r.get('/ice', auth, async (req, res, next) => {
+    try { res.json(await iceConfig()); } catch (e) { next(e); }
   });
 
   r.use((err, req, res, _next) => {
