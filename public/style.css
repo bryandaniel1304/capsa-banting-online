@@ -98,12 +98,14 @@ input, select { font-family: inherit; }
 .tier .t-head { font-family: var(--display); font-weight: 700; font-size: calc(var(--u) * 3.3); color: var(--gold-hi); letter-spacing: .06em; text-transform: uppercase; }
 .tier .t-range { display: flex; flex-direction: column; align-items: center; font-size: calc(var(--u) * 2.7); line-height: 1.2; color: var(--muted); font-weight: 600; max-width: 100%; }
 .chip { --c1: #1f7a4d; --c2: #efe6cc; position: relative; width: calc(var(--u) * 15); height: calc(var(--u) * 15); border-radius: 50%; display: grid; place-items: center; flex: none;
+  max-width: 100%; max-height: none; aspect-ratio: 1; box-sizing: border-box;
   background: repeating-conic-gradient(var(--c1) 0 22.5deg, var(--c2) 22.5deg 45deg); box-shadow: 0 4px 10px rgba(0,0,0,.6), inset 0 0 0 calc(var(--u)*.5) rgba(0,0,0,.25); }
 .chip-in { width: 74%; height: 74%; border-radius: 50%; display: grid; place-items: center; padding: 0 6%;
   background: radial-gradient(circle at 40% 30%, rgba(255,255,255,.25), transparent 55%), var(--c1); border: 1px dashed rgba(255,255,255,.7); box-shadow: inset 0 0 0 calc(var(--u)*.5) rgba(0,0,0,.2); }
 .chip-in span { font-weight: 800; font-size: calc(var(--u) * 3.4); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); max-width: 100%; }
 .tier1 .chip { --c1: #a3202f; } .tier2 .chip { --c1: #1d4c8c; } .tier3 .chip { --c1: #17120a; --c2: #d8b45a; } .tier3 .chip-in span { color: var(--gold-hi); }
 .tier4 .chip { --c1: #e9dfc2; --c2: #8a6a2a; } .tier4 .chip-in span { color: #3b2a0b; text-shadow: none; }
+.tier .chip { width: min(calc(var(--u) * 15), 92%); height: auto; }
 .rules-choice { display: flex; align-items: center; gap: calc(var(--u) * 2); padding: calc(var(--u) * 1.4) calc(var(--u) * 2.6); border-radius: calc(var(--u) * 2.2); background: var(--panel); border: 1px solid var(--line); text-align: left; }
 .rules-choice .rc-lbl { font-size: calc(var(--u) * 2.7); color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
 .rules-choice .rc-name { flex: 1; min-width: 0; font-family: var(--display); font-weight: 700; color: var(--gold-hi); font-size: calc(var(--u) * 3.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
