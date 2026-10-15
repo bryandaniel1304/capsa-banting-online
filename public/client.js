@@ -500,14 +500,20 @@
     return new Promise((resolve) => {
       const el = $('#ask');
       el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? [].concat(text).map((t) => '<p>' + esc(t) + '</p>').join('') : '') +
-        (input != null ? '<input id="askInput"' + (password ? ' type="password" autocomplete="new-password" maxlength="100"' : ' autocomplete="off" maxlength="40"') + (numeric && !password ? ' inputmode="numeric"' : '') + (readonly ? ' readonly' : '') + ' value="' + esc(input) + '">' : '') +
+        (input != null ? '<input id="askInput" aria-label="' + esc([].concat(text || title)[0]) + '"' + (password ? ' type="password" autocomplete="new-password" maxlength="100"' : ' autocomplete="off" maxlength="40"') +
+          (numeric && !password ? ' inputmode="numeric" pattern="[0-9]*"' : '') + (readonly ? ' readonly' : '') + ' value="' + esc(input) + '">' : '') +
         '<div class="row"><button class="btn green" id="askOk">' + esc(ok) + '</button><button class="btn ghost dark" id="askNo">' + esc(cancel) + '</button></div></div>';
       el.classList.remove('hidden');
       const done = (v) => { el.classList.add('hidden'); el.innerHTML = ''; resolve(v); };
       $('#askOk').onclick = () => done(input != null ? $('#askInput').value : true);
       $('#askNo').onclick = () => done(input != null ? null : false);
       const i = $('#askInput');
-      if (i) { i.focus(); i.select(); i.onkeydown = (e) => e.key === 'Enter' && $('#askOk').click(); }
+      if (i) {
+        i.onkeydown = (e) => e.key === 'Enter' && $('#askOk').click();
+        // phones type in the typing bar (opened on focus); selecting here would pull focus back and close that bar
+        if (touch && !i.readOnly) i.focus();
+        else { i.focus(); i.select(); }
+      }
     });
   }
   // Several choices (stacked buttons); resolves with the picked option's value.
@@ -2011,16 +2017,18 @@
     const rotated = stage.classList.contains('rotated');
     typeSheet.innerHTML =
       (rotated ? '<div class="ts-tip">📱↻ Putar HP ke landscape supaya keyboard ikut landscape (iPhone: matikan Kunci Rotasi).</div>' : '') +
-      '<div class="ts-label">' + esc(t.placeholder || 'Ketik') + '</div>' +
+      '<div class="ts-label">' + esc(t.placeholder || t.getAttribute('aria-label') || 'Ketik') + '</div>' +
       '<form class="ts-row" onsubmit="return false"><input id="tsInput"><button type="submit" id="tsOk">OK</button><button type="button" id="tsCancel" aria-label="Tutup">✕</button></form>';
     const i = $('#tsInput');
     i.type = t.type || 'text';
     for (const k of ['autocomplete', 'inputMode', 'autocapitalize', 'enterKeyHint', 'name']) { try { if (t[k]) i[k] = t[k]; } catch {} }
     i.spellcheck = t.spellcheck;
     if (t.maxLength > 0) i.maxLength = t.maxLength;
+    if (t.pattern) i.pattern = t.pattern; // iPhone: number keypad
     i.value = t.value;
     typeSheet.classList.remove('hidden');
     i.focus({ preventScroll: true }); // still inside the tap, so the keyboard opens
+    if (t.id === 'askInput' && i.value) i.select(); // a prefilled number (e.g. the current multiplier) is replaced by typing
     t.blur();
     i.oninput = () => { t.value = i.value; };
     for (const b of typeSheet.querySelectorAll('button')) b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep focus
