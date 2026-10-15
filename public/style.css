@@ -81,7 +81,7 @@ input, select { font-family: inherit; }
 .avatar-picker button.on { background: rgba(216,180,90,.35); box-shadow: 0 0 0 2px var(--gold); }
 .me-stats { display: flex; gap: calc(var(--u) * 1); }
 .me-stats .st { flex: 1; min-width: 0; background: var(--tile); border: 1px solid var(--line-soft); border-radius: calc(var(--u) * 1.6); text-align: center; padding: calc(var(--u) * .7) 0; line-height: 1.15; }
-.me-stats .st b { display: block; font-size: calc(var(--u) * 3.9); color: var(--gold-hi); white-space: nowrap; }
+.me-stats .st b { display: block; font-size: calc(var(--u) * 3.9); color: var(--gold-hi); white-space: nowrap; overflow: hidden; padding: 0 calc(var(--u) * .8); }
 .me-stats .st span { font-size: calc(var(--u) * 2.4); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
 .join-row { display: flex; gap: calc(var(--u) * 1.5); }
 .join-row input { flex: 1; text-transform: uppercase; letter-spacing: .25em; text-align: center; font-family: var(--display); font-weight: 700; }

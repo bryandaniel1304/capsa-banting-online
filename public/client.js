@@ -80,13 +80,25 @@
   let typing = false; // a phone keyboard is open (see type sheet below)
   let lastW = 0;
   // Shrink text that doesn't fit its box (tier cards etc.) so nothing is ever cut off.
+  // Text with data-short (e.g. big numbers) switches to that compact form instead of getting tiny.
   function fitText(root = document) {
     root.querySelectorAll('.fit').forEach((el) => {
       el.style.fontSize = '';
+      if (el.dataset.full != null) { el.textContent = el.dataset.full; delete el.dataset.full; }
       if (!el.clientWidth) return; // not visible yet
-      let size = parseFloat(getComputedStyle(el).fontSize);
-      const min = size * 0.5;
-      while (el.scrollWidth > el.clientWidth + 0.5 && size > min) { size -= 0.5; el.style.fontSize = size + 'px'; }
+      const over = () => el.scrollWidth > el.clientWidth + 0.5;
+      const shrink = (minRatio) => {
+        let size = parseFloat(getComputedStyle(el).fontSize);
+        const min = size * minRatio;
+        while (over() && size > min) { size -= 0.5; el.style.fontSize = size + 'px'; }
+      };
+      shrink(el.dataset.short ? 0.75 : 0.5);
+      if (over() && el.dataset.short) {
+        el.dataset.full = el.textContent;
+        el.textContent = el.dataset.short;
+        el.style.fontSize = '';
+        shrink(0.5);
+      }
     });
   }
   function layout() {
@@ -416,9 +428,19 @@
     renderAccount();
     requestAnimationFrame(() => fitText($('#home')));
   }
-  const stat = (label, value) => '<div class="st"><b>' + value + '</b><span>' + label + '</span></div>';
-  const statsHTML = (s) => stat('Game', s.games || 0) + stat('Menang', s.wins || 0) + stat('Total poin', pts(s.points || 0)) +
-    stat('Sesi', s.matches || 0) + stat('Bersih', ((s.net || 0) > 0 ? '+' : '') + num(s.net || 0));
+  // compact Indonesian form for big numbers: 8.891.250 -> 8,89 jt
+  const shortNum = (n) => {
+    const a = Math.abs(n);
+    const f = (v, u) => (+v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)).toLocaleString('id-ID') + ' ' + u;
+    return a >= 1e12 ? f(a / 1e12, 'T') : a >= 1e9 ? f(a / 1e9, 'M') : a >= 1e6 ? f(a / 1e6, 'jt') : f(a / 1e3, 'rb');
+  };
+  // a stat tile: the number shrinks to fit its box, and very long numbers switch to the compact form
+  const stat = (label, value, raw) => {
+    const short = raw != null && Math.abs(raw) >= 1e4 ? (raw < 0 ? '-' : String(value)[0] === '+' ? '+' : '') + shortNum(raw) : '';
+    return '<div class="st"><b class="fit" title="' + esc(value) + '"' + (short ? ' data-short="' + esc(short) + '"' : '') + '>' + esc(value) + '</b><span>' + label + '</span></div>';
+  };
+  const statsHTML = (s) => stat('Game', num(s.games || 0), s.games || 0) + stat('Menang', num(s.wins || 0), s.wins || 0) + stat('Total poin', pts(s.points || 0), s.points || 0) +
+    stat('Sesi', num(s.matches || 0), s.matches || 0) + stat('Bersih', ((s.net || 0) > 0 ? '+' : '') + num(s.net || 0), s.net || 0);
   async function renderAccount() {
     const logged = !!me.user;
     $('#authBox').classList.toggle('hidden', logged);
@@ -429,7 +451,7 @@
       $('#avatarBtn').textContent = me.user.avatar;
       $('#meName').textContent = me.user.name;
       $('#meUser').textContent = '@' + me.user.username;
-      if (me.stats) $('#meStats').innerHTML = statsHTML(me.stats);
+      if (me.stats) { $('#meStats').innerHTML = statsHTML(me.stats); requestAnimationFrame(() => fitText($('#meStats'))); }
     };
     paint();
     try { const d = await api('/me'); me.user = d.user; me.stats = d.stats; paint(); }
@@ -1192,6 +1214,7 @@
     const body = el.querySelector('.rules-body');
     try {
       const [d, h] = await Promise.all([api('/me'), api('/history')]);
+      setTimeout(() => fitText(body), 0);
       body.innerHTML = '<div class="me-stats wide">' + statsHTML(d.stats) + '</div>' +
         '<h4>Teman Main</h4>' + (h.friends.length ? '<div class="friends">' + h.friends.map((f) => '<span class="friend">' + esc(f.avatar || '') + ' ' + esc(f.name) + ' <small>' + f.matches + ' sesi · ' + f.games + ' game</small></span>').join('') + '</div>' : '<p class="muted">Belum ada teman main.</p>') +
         '<h4>Sesi Bermain</h4>' + (h.matches.length ? h.matches.map(matchCard).join('') : '<p class="muted">Belum ada sesi. Ayo main!</p>');
@@ -1757,6 +1780,7 @@
         friends: '<span class="prof-tag good">✓ Teman</span><button class="btn blue" data-pact="chat">💬 Chat</button>',
       }[d.relation];
       $('#profBody').innerHTML = '<div class="me-stats wide prof-stats">' + statsHTML(s) + '</div><div class="prof-acts">' + acts + '</div>';
+      requestAnimationFrame(() => fitText($('#profBody')));
       $('#profBody').onclick = async (e) => {
         const b = e.target.closest('[data-pact]'); if (!b) return;
         try {
