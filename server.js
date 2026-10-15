@@ -352,7 +352,7 @@ function nextActor(room, from) {
   const g = room.game;
   for (let k = 1; k <= 4; k++) {
     const t = (from + k) % 4;
-    if (!g.hands[t] || g.passed.includes(t) || (room.seats[t] && (room.seats[t].sitOut || room.seats[t].paused))) continue;
+    if (!g.hands[t] || g.passed.includes(t) || (room.seats[t] && (room.seats[t].sitOut || room.seats[t].paused)) || cantAnswer(g, t)) continue;
     return t;
   }
   return null;
@@ -379,7 +379,13 @@ function advance(room, from) {
     }
     if (g.passed.includes(t) || room.seats[t].sitOut) continue; // a sat-out last player hands the lead to the next one
     if (room.seats[t].paused) {
-      if (g.lastPlay) { g.passed.push(t); io.to(room.code).emit('fx', { type: 'pass', seat: t, auto: true }); }
+      if (g.lastPlay) { g.passed.push(t); io.to(room.code).emit('fx', { type: 'pass', seat: t, auto: 'paused' }); }
+      continue;
+    }
+    // can't answer at all: fewer cards in hand than the play on the table (e.g. 1 card vs a pair, 4 vs a 5-card hand)
+    if (cantAnswer(g, t)) {
+      g.passed.push(t);
+      io.to(room.code).emit('fx', { type: 'pass', seat: t, auto: 'cards', need: g.lastPlay.cards.length });
       continue;
     }
     g.turn = t;
@@ -387,6 +393,8 @@ function advance(room, from) {
     return;
   }
 }
+
+const cantAnswer = (g, t) => !!(g.lastPlay && !g.free && g.hands[t] && g.hands[t].length < g.lastPlay.cards.length);
 
 // The player whose turn it is stops playing: move on without them.
 function skipTurn(room, seat) {

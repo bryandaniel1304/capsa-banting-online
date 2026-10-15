@@ -395,7 +395,14 @@
   });
   socket.on('fx', (fx) => {
     if (fx.type === 'play') { sfx.card(); if (fx.kind === 'five' || fx.kind === 'dragon') banner(fx.name); }
-    else if (fx.type === 'pass') sfx.pass();
+    else if (fx.type === 'pass') {
+      sfx.pass();
+      // the system skipped them: fewer cards than the play on the table, or away for a while
+      if (fx.auto === 'cards') {
+        bubble(fx.seat, 'Lewat otomatis');
+        if (V && fx.seat === V.you) toast('Kartumu kurang dari ' + fx.need + ', giliranmu otomatis dilewati');
+      } else if (fx.auto === 'paused') bubble(fx.seat, '⏸ Dilewati');
+    }
     else if (fx.type === 'deal') sfx.deal();
     else if (fx.type === 'win') { if (V && fx.seat === V.you) sfx.win(); else sfx.lose(); }
     else if (fx.type === 'bonus') {
@@ -676,15 +683,16 @@
     else if (p.paused) tags.push('<span class="tag paused">⏸ JEDA</span>');
     else if (!p.connected) tags.push('<span class="tag">OFFLINE</span>');
     const showCount = playing && p.inGame && !isMe;
-    const kick = V.host === V.you && !isMe && !playing ? '<div class="seat-acts"><button data-kick="' + seat + '">Keluarkan</button></div>' : '';
+    // host: a small ✕ on the avatar removes the player (no extra row under the seat, so nothing overlaps)
+    const kick = V.host === V.you && !isMe && !playing ? '<button class="kick-x" data-kick="' + seat + '" aria-label="Keluarkan ' + esc(p.name) + '" title="Keluarkan">✕</button>' : '';
     el.innerHTML =
       '<div class="ava-wrap"><div class="ring"></div><div class="avatar">' + avatarHTML(p.avatar) + '</div>' +
       (p.voice ? '<div class="vbadge' + (p.muted ? ' muted' : '') + '">' + (p.muted ? '🔇' : '🎙️') + '</div>' : '') +
       (p.passed ? '<div class="passhand">✋</div>' : '') +
-      '<div class="tags">' + tags.join('') + '</div></div>' +
+      '<div class="tags">' + tags.join('') + '</div>' + kick + '</div>' +
       '<div class="plate"><div class="nm">' + esc(p.name) + '</div><div class="ch">⭐ ' + pts(p.score) + ' poin' + (p.bonus ? ' <span class="bn">' + p.bonus + '</span>' : '') + '</div></div>' +
       (showCount ? '<div class="count' + (p.count <= 3 ? ' warn' : '') + '">' + p.count + '</div>' : '') +
-      (turn && !isMe ? '<div class="tmr">' + Math.ceil((deadline - Date.now()) / 1000) + '</div>' : '') + kick;
+      (turn && !isMe ? '<div class="tmr">' + Math.ceil((deadline - Date.now()) / 1000) + '</div>' : '');
     bubbles.forEach((x) => el.appendChild(x));
   }
 
@@ -700,7 +708,13 @@
       return;
     }
     if (b.dataset.bot) socket.emit('addBot', { seat: +b.dataset.bot });
-    if (b.dataset.kick) socket.emit('kick', { seat: +b.dataset.kick });
+    if (b.dataset.kick) {
+      const p = V.seats[+b.dataset.kick];
+      if (!p) return;
+      if (p.bot) socket.emit('kick', { seat: +b.dataset.kick }); // bots: no need to ask
+      else ask({ title: 'Keluarkan ' + p.name + '?', text: p.name + ' akan dikeluarkan dari meja.', ok: 'Keluarkan', cancel: 'Batal' })
+        .then((ok) => ok && socket.emit('kick', { seat: +b.dataset.kick }));
+    }
     if (b.dataset.inv) openFriends('online');
   });
 
@@ -723,9 +737,10 @@
     let html = hist.map((h, i) => '<div class="play old" style="transform:translate(calc(-50% + ' + (i - hist.length) * 3 + 'px), calc(-50% - ' + (hist.length - i) * 6 + 'px)) rotate(' + ((i % 2 ? 1 : -1) * 4) + 'deg)">' + h.cards.map((x) => cardHTML(x)).join('') + '</div>').join('');
     const v = SEAT_VEC[rel(lp.seat)];
     html += '<div class="play' + (isNew ? ' new' : '') + '" style="transform:translate(-50%,-50%);--fx:calc(var(--u)*' + v[0] + ');--fy:calc(var(--u)*' + v[1] + ')">' + lp.cards.map((x) => cardHTML(x)).join('') + '</div>';
-    if (V.free) {
+    // on my own free turn the suggestions sit there instead (the 2♠ banner and toast already said it)
+    if (V.free && lp.seat !== V.you) {
       const who = V.seats[lp.seat];
-      html += '<div class="free-tag">2♠ · ' + (lp.seat === V.you ? 'Kamu main lagi!' : esc(who ? who.name : '') + ' main lagi') + '</div>';
+      html += '<div class="free-tag">2♠ · ' + esc(who ? who.name : '') + ' main lagi</div>';
     }
     c.innerHTML = html;
   }
@@ -789,7 +804,7 @@
     const n = handOrder.length;
     const W = el.clientWidth;
     const u = parseFloat(getComputedStyle(stage).getPropertyValue('--u')) || 4;
-    const cw = 21 * u;
+    const cw = 19.6 * u; // matches .hand --card-w
     const step = n > 1 ? Math.min(cw * 0.98, (W - cw) / (n - 1)) : 0;
     const total = cw + step * (n - 1);
     const x0 = (W - total) / 2;
@@ -911,7 +926,7 @@
   const ACTION_GUARD_MS = 450;
   function renderActions() {
     const act = $('#actions'), hints = $('#hints');
-    if (!myTurn()) { act.classList.add('hidden'); hints.innerHTML = ''; $('#dutyWarn').classList.add('hidden'); return; }
+    if (!myTurn()) { act.classList.add('hidden'); hints.innerHTML = ''; return; }
     if (act.classList.contains('hidden')) actionsShownAt = Date.now();
     act.classList.remove('hidden');
     const sel = [...selected];
@@ -921,11 +936,8 @@
     $('#playBtn').disabled = !ok;
     $('#passBtn').disabled = !lastEv();
     const duty = V.cekiDuty != null ? V.seats[V.cekiDuty] : null;
-    const dw = $('#dutyWarn');
-    if (duty) {
-      dw.innerHTML = '⚠️ <b>' + esc(duty.name) + ' CEKI</b> · buang kartu tertinggimu (atau tahan pakai pair / three / 5 kartu)';
-      dw.classList.remove('hidden');
-    } else dw.classList.add('hidden');
+    // the ceki warning leads the suggestion row (in the middle, clear of the action buttons)
+    const dutyHTML = duty ? '<div class="duty-warn">⚠️ <b>' + esc(duty.name) + ' CEKI</b> · buang kartu tertinggi (atau pair / three / 5 kartu)</div>' : '';
     let sug = hintsOn ? suggestions() : [];
     if (hintsOn && duty) {
       const top = G.highestCard(V.hand);
@@ -934,7 +946,8 @@
         sug = [{ cards: [top], ev: G.evaluate([top]), sig: 'top' }].concat(sug.filter((x) => !(x.cards.length === 1))).slice(0, 3);
       }
     }
-    hints.innerHTML = sug.map((s, i) => '<button class="hint' + (i === hintIdx ? ' on' : '') + '" data-h="' + i + '">' + miniHTML(s.cards) + '<span>' + (s.ev.kind === 'five' || s.ev.kind === 'dragon' ? s.ev.name : HINT_NAME[s.ev.kind]) + '</span></button>').join('');
+    if (duty) sug = sug.slice(0, 2); // keep the row (warning + suggestions) within the table
+    hints.innerHTML = dutyHTML + sug.map((s, i) => '<button class="hint' + (i === hintIdx ? ' on' : '') + '" data-h="' + i + '">' + miniHTML(s.cards) + '<span>' + (s.ev.kind === 'five' || s.ev.kind === 'dragon' ? s.ev.name : HINT_NAME[s.ev.kind]) + '</span></button>').join('');
     hints.querySelectorAll('.hint').forEach((b) => (b.onclick = () => {
       const s = sug[+b.dataset.h];
       if (hintIdx === +b.dataset.h) return play(); // second tap plays it
