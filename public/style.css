@@ -480,3 +480,57 @@ td.fin-td .mini .card + .card, .gfin .mini .card + .card { margin-left: calc(var
 .re-cp select option { background: #0e1814; color: var(--cream); }
 .re-cp input[data-cp-val] { flex: 0 0 calc(var(--u)*12); text-align: center; font-weight: 700; color: var(--gold-hi); }
 .rules-body p.cnote b { color: var(--gold-hi); }
+
+/* ---------- loading: splash on start + spinner while loading ---------- */
+.splash { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 40%, #12382a 0%, #07110d 60%, #030806 100%); transition: opacity .45s; }
+.splash.out { opacity: 0; pointer-events: none; }
+.splash-in { display: flex; flex-direction: column; align-items: center; gap: 3.2vmin; padding: 6vmin; text-align: center; }
+.splash .logo { align-items: center; }
+.splash .logo .l1 { font-size: 8vmin; } .splash .logo .l2 { font-size: 12vmin; } .splash .logo .l3 { font-size: 2.6vmin; }
+.spin-chip { width: 15vmin; height: 15vmin; max-width: 110px; max-height: 110px; border-radius: 50%; display: grid; place-items: center;
+  background: repeating-conic-gradient(#efe6cc 0 15deg, #1f7a4d 15deg 45deg); box-shadow: 0 0 0 .6vmin rgba(0,0,0,.4), 0 1.5vmin 4vmin rgba(0,0,0,.6); animation: chipSpin 1.1s linear infinite; }
+.spin-face { width: 72%; height: 72%; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle at 35% 30%, #2a8a5c, #145236); border: .5vmin dashed rgba(239,230,204,.7);
+  color: var(--gold-hi); font-size: 6vmin; animation: chipSpin 1.1s linear infinite reverse; }
+@keyframes chipSpin { to { transform: rotate(360deg); } }
+.splash-bar { width: min(60vw, 340px); height: 6px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; border: 1px solid var(--line-soft); }
+.splash-bar i { display: block; height: 100%; width: 12%; background: linear-gradient(90deg, #b48a35, #f6e3a1); border-radius: inherit; transition: width .5s ease; }
+.splash-msg { color: var(--muted); font-weight: 600; font-size: max(13px, 2.4vmin); max-width: 80vw; }
+.splash-msg .pill { margin-left: 8px; font-size: 13px; }
+.loading { position: absolute; inset: 0; z-index: 120; display: grid; place-items: center; background: rgba(2,5,4,.55); animation: fade .2s; }
+.ld-box { display: flex; align-items: center; gap: calc(var(--u)*3); background: var(--panel-solid); border: 1px solid var(--line); border-radius: calc(var(--u)*3); padding: calc(var(--u)*3) calc(var(--u)*5); box-shadow: 0 12px 30px rgba(0,0,0,.6); }
+.spin-chip.small { width: calc(var(--u)*11); height: calc(var(--u)*11); box-shadow: none; }
+.spin-chip.small .spin-face { font-size: calc(var(--u)*4.5); border-width: 2px; }
+.ld-msg { font-weight: 700; font-size: calc(var(--u)*3.8); color: var(--gold-hi); }
+
+/* ---------- leaving / coming back ---------- */
+.choices { display: flex; flex-direction: column; gap: calc(var(--u)*1.8); align-items: stretch; }
+.choices .btn small { display: block; font-size: .72em; font-weight: 600; letter-spacing: .02em; text-transform: none; opacity: .8; margin-top: 2px; }
+.tag.paused { background: #f4c96b; color: #3b2600; }
+.away-note.paused { background: rgba(244,201,107,.14); color: #f6e3a1; }
+.rejoin-bar { position: absolute; left: 50%; top: calc(var(--u)*2); transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: calc(var(--u)*2);
+  background: rgba(14,24,20,.96); border: 1px solid var(--gold); border-radius: 99px; padding: calc(var(--u)*1) calc(var(--u)*1.4) calc(var(--u)*1) calc(var(--u)*4); box-shadow: 0 6px 20px rgba(0,0,0,.6); white-space: nowrap; }
+.rejoin-bar .rj-txt { font-weight: 700; font-size: calc(var(--u)*3.3); color: var(--cream); }
+.rejoin-bar .rj-txt b { color: var(--gold-hi); letter-spacing: .08em; }
+.wait-next { position: absolute; left: 50%; bottom: calc(var(--u)*10); transform: translateX(-50%); background: rgba(8,14,11,.85); border: 1px solid var(--line); color: var(--gold-hi);
+  font-weight: 700; font-size: calc(var(--u)*3.6); padding: calc(var(--u)*1.6) calc(var(--u)*4); border-radius: 99px; white-space: nowrap; }
+.device-info { font-size: calc(var(--u)*2.6); color: var(--muted); text-align: center; margin-top: calc(var(--u)*.5); }
+
+/* ---------- friends & online players ---------- */
+.ftabs { display: flex; gap: calc(var(--u)*1.5); margin-bottom: calc(var(--u)*2); }
+.ftabs button { flex: 1; padding: calc(var(--u)*1.4); border-radius: calc(var(--u)*2); border: 1px solid var(--line-soft); background: rgba(255,255,255,.03); color: var(--muted); font-weight: 700; font-size: calc(var(--u)*3.3); }
+.ftabs button.on { border-color: var(--gold); color: var(--gold-hi); background: rgba(216,180,90,.12); }
+.online-head { display: flex; gap: calc(var(--u)*2); align-items: center; justify-content: space-between; margin-bottom: calc(var(--u)*1.5); }
+.ftag { font-size: calc(var(--u)*2.8); color: var(--muted); font-weight: 700; padding: 0 calc(var(--u)*1.5); align-self: center; }
+
+/* ---------- device-specific tweaks ---------- */
+/* low-memory phones / reduced motion: no blur, lighter shadows, shorter animations */
+html.lite *, html.lite *::before, html.lite *::after { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+html.lite .card, html.lite .seat, html.lite .btn, html.lite .dialog { box-shadow: none !important; }
+html.lite .card.deal { animation-duration: .15s !important; }
+@media (prefers-reduced-motion: reduce) { .spin-chip, .spin-face { animation-duration: 3s; } }
+/* computers: hover feedback (phones keep tap feedback only) */
+html[data-device="desktop"] .btn:not(:disabled):hover, html[data-device="desktop"] .pill:hover, html[data-device="desktop"] .round-btn:hover { filter: brightness(1.12); }
+html[data-device="desktop"] .hand .card:not(.sel):not(.dragging):hover { transform: translateY(calc(var(--u)*-1.5)); }
+/* phones: slightly larger tap targets for the small controls */
+html[data-device="phone"] .pill { padding: calc(var(--u) * 1.1) calc(var(--u) * 2.8); }
+html[data-device="phone"] .seat-acts button { min-height: calc(var(--u)*7); }

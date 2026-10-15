@@ -16,11 +16,21 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- splash while the app starts (outside the stage: shown before any script runs) -->
+<div id="splash" class="splash">
+  <div class="splash-in">
+    <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">— ONLINE —</span></div>
+    <div class="spin-chip"><div class="spin-face">♠</div></div>
+    <div class="splash-bar"><i id="splashBar"></i></div>
+    <div id="splashMsg" class="splash-msg">Memuat tampilan…</div>
+  </div>
+</div>
 <div id="stage">
 
   <!-- HOME -->
   <section id="home" class="screen">
     <div class="home-bg"></div>
+    <div id="rejoinBar" class="rejoin-bar hidden"></div>
     <div class="home-wrap">
       <div class="home-left">
         <div class="logo"><span class="l1">Capsa</span><span class="l2">Banting</span><span class="l3">— ONLINE —</span></div>
@@ -129,7 +139,9 @@
         <button id="leaveBtn" class="btn red">Keluar Meja</button>
         <button id="voiceOffBtn" class="btn ghost hidden">🎤 Matikan Voice Chat</button>
         <button id="fsBtn" class="btn ghost">⛶ Layar Penuh</button>
+        <button id="installBtn" class="btn ghost hidden">📲 Pasang di Layar Utama</button>
         <button id="closeMenu" class="btn ghost">Tutup</button>
+        <div id="deviceInfo" class="device-info"></div>
       </div>
     </div>
   </section>
@@ -141,6 +153,7 @@
   <div id="friends" class="overlay hidden"></div>
   <div id="dm" class="overlay hidden"></div>
   <div id="ask" class="overlay hidden"></div>
+  <div id="loading" class="loading hidden"><div class="ld-box"><div class="spin-chip small"><div class="spin-face">♠</div></div><div id="loadingMsg" class="ld-msg">Memuat…</div></div></div>
   <div id="toasts"></div>
   <div id="conn" class="conn hidden">Menghubungkan…</div>
   <div id="rotateTip" class="rotate-tip hidden"><span>📱↻ Putar HP ke <b>landscape</b> supaya tampilan &amp; keyboard ikut landscape. iPhone: matikan <b>Kunci Rotasi</b> di Pusat Kontrol.</span><button id="rotateTipX" aria-label="Tutup">✕</button></div>

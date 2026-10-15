@@ -46,6 +46,14 @@ This prints a public `https://*.trycloudflare.com` link. It works while your PC 
 If you refresh or lose connection, you're asked first whether to continue at your table (**Lanjutkan** / **Tidak**). If your turn runs out (20 s), you auto-pass, or you play your lowest card when leading.
 - **Tidak**: your hand is no longer played but still counts when the game ends. After that game, the remaining players choose to continue without you (you leave the table, and your points stay in the final settlement) or to end the session.
 - Offline players never block the table: ending the session needs only the players who are online, and after a game the others can continue without them.
+
+**Keluar Meja** asks whether you'll come back:
+- **Keluar sementara** (back later): your seat, cards and points stay. Your turns are skipped (counted as a pass for that round) until you return. If you come back before being skipped in the current round you play on; otherwise you join in the next round. New games are dealt without you until you're back. The home screen shows **Kembali ke Meja**.
+- **Keluar dari permainan**: your cards are no longer played but still count. The others are asked right away whether to continue without you or end the session (an unfinished game is then not counted).
+
+The app starts with a loading screen (it also explains when the free server is waking up) and shows a spinner while tables load.
+It reads the device it runs on (OS, phone / tablet / computer, notch safe-area, installed app, low-memory phones) and adapts:
+the table stays inside the notch / home-indicator area, low-end phones get lighter effects, and the menu offers fullscreen or "add to home screen" where the device supports it.
 Tip: on Android Chrome, "Add to Home screen" gives a fullscreen, landscape app.
 
 ## Accounts & saved history
@@ -75,7 +83,7 @@ Tap a player at the table to see their profile and stats, and add them as a frie
 
 ## Friends, chat, invites & voice
 - **Friends:** add by username (the other player accepts), remove anytime. Friends show live status: online, at a table, playing, or offline.
-- **Invite:** from the 👥 Teman panel, invite an online friend to your current table; they get a Gabung / Nanti popup.
+- **Invite:** from the 👥 Teman panel, invite an online friend, or anyone online in the **🌐 Pemain Online** tab (and add them as a friend), to your current table; they get a Gabung / Nanti popup.
 - **Direct chat:** private messages between friends, saved in the database, delivered live with unread badges.
 - **Table reactions:** type any message (up to 80 chars) or pick a quick phrase.
 - **Voice chat:** tap 🎤 at the table to join, tap again to mute. Peer-to-peer WebRTC; the server only relays signaling.

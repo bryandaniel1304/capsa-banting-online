@@ -39,9 +39,44 @@
   }
   let muted = store.get('muted', false);
 
+  // ---------- device profile: adapt the UI to the phone / tablet / computer it runs on ----------
+  const touch = window.matchMedia('(pointer: coarse)').matches;
+  const device = (() => {
+    const ua = navigator.userAgent || '';
+    const uad = navigator.userAgentData;
+    const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); // iPadOS reports a Mac
+    const android = /Android/i.test(ua);
+    const os = ios ? 'ios' : android ? 'android' : /Windows/.test(ua) ? 'windows' : /Mac OS X|Macintosh/.test(ua) ? 'mac' : /CrOS|Linux/.test(ua) ? 'linux' : 'other';
+    const short = Math.min(screen.width, screen.height);
+    const mobileHint = uad && typeof uad.mobile === 'boolean' ? uad.mobile : /Mobi|iPhone|iPod/.test(ua);
+    const type = !touch ? 'desktop' : (mobileHint || short < 600) ? 'phone' : 'tablet';
+    const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+    const inApp = /FBAN|FBAV|Instagram|Line\/|WhatsApp|TikTok|Snapchat|; wv\)/i.test(ua); // in-app browsers: no fullscreen / install
+    const mem = navigator.deviceMemory || null, cores = navigator.hardwareConcurrency || null;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const lite = reduce || (mem != null && mem <= 3) || (type === 'phone' && android && cores != null && cores <= 4);
+    const canFullscreen = !!document.documentElement.requestFullscreen && !ios && !inApp && !standalone;
+    return { os, type, standalone, inApp, lite, canFullscreen, dpr: window.devicePixelRatio || 1, mem, cores };
+  })();
+  {
+    const root = document.documentElement;
+    root.dataset.os = device.os; root.dataset.device = device.type;
+    root.classList.toggle('standalone', device.standalone);
+    root.classList.toggle('lite', device.lite); // low-memory / reduced-motion devices: lighter effects
+    root.classList.toggle('touch', touch);
+  }
+  // Notches, rounded corners and the home indicator: keep the table inside the safe area.
+  const insetProbe = document.createElement('div');
+  insetProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+    'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+  document.body.appendChild(insetProbe);
+  function insets() {
+    const cs = getComputedStyle(insetProbe);
+    return { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+  }
+
   // ---------- layout: always landscape ----------
   // Phones held upright get the table rotated; a tall desktop window gets a centered landscape table instead.
-  const touch = window.matchMedia('(pointer: coarse)').matches;
   let typing = false; // a phone keyboard is open (see type sheet below)
   let lastW = 0;
   // Shrink text that doesn't fit its box (tier cards etc.) so nothing is ever cut off.
@@ -61,10 +96,14 @@
     lastW = w;
     const portrait = h > w;
     const rotate = portrait && touch;
-    let W = rotate ? h : w, H = rotate ? w : h;
-    if (portrait && !touch) H = Math.min(h, Math.round(w * 0.56));
+    const i = insets();
+    // usable area inside the safe area (in the rotated case the game's width runs along the screen's height)
+    const sw = w - i.l - i.r, sh = h - i.t - i.b;
+    let W = rotate ? sh : sw, H = rotate ? sw : sh;
+    if (portrait && !touch) H = Math.min(sh, Math.round(sw * 0.56));
     stage.classList.toggle('rotated', rotate);
-    stage.style.top = !rotate && H < h ? Math.round((h - H) / 2) + 'px' : '0px';
+    stage.style.left = i.l + 'px';
+    stage.style.top = (i.t + (!rotate && H < sh ? Math.round((sh - H) / 2) : 0)) + 'px';
     stage.style.setProperty('--W', W + 'px');
     stage.style.setProperty('--H', H + 'px');
     // size by height, but keep everything inside narrow-ish landscape screens
@@ -80,12 +119,18 @@
   let rotateTipClosed = false;
   function showRotateTip(rotated) {
     const tip = document.getElementById('rotateTip');
-    if (tip) tip.classList.toggle('hidden', !rotated || rotateTipClosed);
+    if (!tip) return;
+    if (rotated && !tip.dataset.os) {
+      tip.dataset.os = device.os;
+      tip.querySelector('span').innerHTML = '📱↻ Putar HP ke <b>landscape</b> supaya tampilan &amp; keyboard ikut landscape. ' +
+        (device.os === 'ios' ? 'iPhone: matikan <b>Kunci Rotasi</b> di Pusat Kontrol.' : device.os === 'android' ? 'Android: nyalakan <b>Putar otomatis</b> di panel notifikasi.' : '');
+    }
+    tip.classList.toggle('hidden', !rotated || rotateTipClosed);
   }
   document.getElementById('rotateTipX').onclick = () => { rotateTipClosed = true; showRotateTip(false); };
   let triedLock = false;
   function lockLandscape() {
-    if (triedLock || !touch) return;
+    if (triedLock || !touch || !device.canFullscreen) return; // iPhone Safari, in-app browsers, installed app: no lock needed / possible
     triedLock = true;
     const d = document.documentElement;
     if (!d.requestFullscreen || !screen.orientation || !screen.orientation.lock) return; // e.g. iPhone Safari
@@ -93,6 +138,7 @@
   }
   window.addEventListener('pointerup', lockLandscape, { once: true, capture: true });
   window.addEventListener('resize', layout);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => layout()); // mobile browser bars showing / hiding
   if (window.ResizeObserver) new ResizeObserver(() => layout()).observe(document.documentElement);
   window.addEventListener('orientationchange', () => setTimeout(layout, 200));
 
@@ -151,7 +197,39 @@
   const rel = (seat) => (V ? (seat - V.you + 4) % 4 : seat); // 0 me, 1 right, 2 top, 3 left (counter-clockwise)
   const seatEl = (seat) => $('#seat' + rel(seat));
 
+  // ---------- loading: splash on start, spinner while something loads ----------
+  const splash = document.getElementById('splash');
+  const splashStart = Date.now();
+  let splashDone = false;
+  function splashStep(msg, pct) {
+    if (splashDone) return;
+    $('#splashMsg').textContent = msg;
+    if (pct != null) $('#splashBar').style.width = pct + '%';
+  }
+  function hideSplash() {
+    if (splashDone) return;
+    splashDone = true;
+    splashStep('Siap!', 100);
+    const wait = Math.max(0, 700 - (Date.now() - splashStart)); // don't just flash it
+    setTimeout(() => { splash.classList.add('out'); setTimeout(() => splash.remove(), 450); }, wait);
+  }
+  setTimeout(() => splashStep('Server sedang bangun (±1 menit)… permainan tersimpan, tunggu ya', 55), 6000);
+  setTimeout(() => {
+    if (splashDone) return;
+    $('#splashMsg').innerHTML = 'Masih menyambung… <button id="splashReload" class="pill">↻ Muat ulang</button>';
+    $('#splashReload').onclick = () => location.reload();
+  }, 45000);
+  let loadTimer = null;
+  function loading(msg) {
+    $('#loadingMsg').textContent = msg || 'Memuat…';
+    $('#loading').classList.remove('hidden');
+    clearTimeout(loadTimer);
+    loadTimer = setTimeout(() => { loaded(); toast('Koneksi lambat, coba lagi', true); }, 20000);
+  }
+  function loaded() { clearTimeout(loadTimer); $('#loading').classList.add('hidden'); }
+
   // ---------- socket ----------
+  splashStep('Menghubungkan ke server…', 35);
   const socket = io({ transports: ['websocket', 'polling'] });
   let V = null; // latest view from server
   let deadline = 0;
@@ -164,12 +242,16 @@
   let hintIdx = -1;
 
   function hello() {
+    splashStep('Memuat akunmu…', 75);
     socket.emit('hello', { auth: authToken }, (res) => {
+      hideSplash();
+      loaded();
       me.user = (res && res.user) || null;
       if (me.user) refreshFriends();
       if (!me.user && authToken) { authToken = null; store.set('auth', null); }
       if (res && res.room) return;
       if (res && res.resume) return askResume(res.resume);
+      if (pending) setPending(null);
       if (V) { const code = V.code; goHome(); toast('Kamu sudah tidak ada di meja ' + code, true); return; } // removed while away
       const want = new URLSearchParams(location.search).get('room');
       if (want && me.user) joinRoom(want);
@@ -199,34 +281,70 @@
   }
   socket.on('disconnect', connLost);
 
-  // Back after a disconnect (or on another device): ask before going back to the table.
+  // Back after a disconnect, after "keluar sementara", or on another device: ask before going back to the table.
   let resumeOpen = false;
   async function askResume(info) {
     if (resumeOpen) return;
     resumeOpen = true;
+    setPending(info);
     if (!V) showHome(); // fresh page: show the (logged-in) home screen behind the question
-    const who = info.players.map((p) => p.name + (p.bot ? ' (bot)' : p.sitOut ? ' (tidak lanjut)' : p.online ? '' : ' (offline)')).join(', ') || '-';
+    const who = info.players.map((p) => p.name + (p.bot ? ' (bot)' : p.sitOut ? ' (tidak lanjut)' : p.paused ? ' (keluar sementara)' : p.online ? '' : ' (offline)')).join(', ') || '-';
     const now = info.state === 'playing' ? 'Game #' + info.gameNo + ' masih berlangsung' + (info.cards ? ', kartumu sisa ' + info.cards : '') + '.'
       : info.state === 'result' ? 'Game #' + info.gameNo + ' sudah selesai.'
       : info.state === 'final' ? 'Permainan sudah diakhiri.' : 'Meja menunggu dimulai.';
-    const no = info.state === 'playing' ? 'Jika tidak, kartumu tidak dimainkan lagi tapi tetap dihitung poinnya. Setelah game ini, pemain lain memutuskan lanjut tanpa kamu.'
-      : info.state === 'result' ? 'Jika tidak, pemain lain memutuskan lanjut tanpa kamu. Poinmu tetap dihitung di hasil akhir.'
-      : 'Jika tidak, kamu keluar dari meja.';
-    const ok = await ask({
-      title: '🔄 Lanjutkan Permainan?',
-      text: ['Koneksimu sempat terputus dari meja ' + info.code + ' (x' + num(info.mult) + '). ' + now, 'Pemain lain: ' + who, no],
-      ok: 'Lanjutkan', cancel: 'Tidak',
+    const no = info.state === 'playing' ? 'Keluar dari permainan: kartumu tidak dimainkan lagi tapi tetap dihitung poinnya, dan pemain lain memutuskan lanjut tanpa kamu.'
+      : info.state === 'result' ? 'Keluar dari permainan: pemain lain memutuskan lanjut tanpa kamu. Poinmu tetap dihitung di hasil akhir.'
+      : 'Keluar dari permainan: kamu keluar dari meja.';
+    const options = [{ value: 'resume', label: '▶️ Lanjutkan', cls: 'green' }];
+    if (info.paused) options.push({ value: 'later', label: '⏸️ Nanti saja', cls: 'ghost dark', note: 'Tetap keluar sementara' });
+    options.push({ value: 'quit', label: '🚪 Keluar dari permainan', cls: 'red' });
+    const pick = await choose({
+      title: info.paused ? '▶️ Kembali ke Meja?' : '🔄 Lanjutkan Permainan?',
+      text: [(info.paused ? 'Kamu sedang keluar sementara dari meja ' : 'Koneksimu sempat terputus dari meja ') + info.code + ' (x' + num(info.mult) + '). ' + now, 'Pemain lain: ' + who, no],
+      options,
     });
     resumeOpen = false;
-    if (ok) {
-      leftCode = null;
-      socket.emit('resume', null, (res) => { if (res && res.error) { toast(res.error, true); goHome(); } });
-    } else {
-      leftCode = info.code;
-      socket.emit('abandon', null, () => {});
-      goHome();
-      toast('Kamu tidak melanjutkan meja ' + info.code);
-    }
+    if (pick === 'resume') resumeTable(info.code);
+    else if (pick === 'quit') abandonTable(info.code);
+  }
+
+  // A table I'm still seated at but not playing on this device (paused / not resumed yet): shown on the home screen.
+  let pending = null;
+  function setPending(info) { pending = info; renderPending(); }
+  function renderPending() {
+    const el = $('#rejoinBar');
+    if (!pending || V) { el.classList.add('hidden'); return; }
+    el.innerHTML = '<span class="rj-txt">' + (pending.paused ? '⏸️ Kamu keluar sementara dari meja ' : '🃏 Kamu masih punya meja ') + '<b>' + esc(pending.code) + '</b></span>' +
+      '<button class="btn green small" id="rejoinGo">▶️ Kembali ke Meja</button><button class="btn ghost small dark" id="rejoinQuit">Keluar Permanen</button>';
+    el.classList.remove('hidden');
+    $('#rejoinGo').onclick = () => resumeTable(pending.code);
+    $('#rejoinQuit').onclick = async () => {
+      const code = pending.code;
+      if (await ask({ title: 'Keluar dari permainan?', text: 'Kartumu di meja ' + code + ' tidak dimainkan lagi tapi tetap dihitung poinnya. Pemain lain memutuskan lanjut tanpa kamu.', ok: 'Keluar', cancel: 'Batal' })) abandonTable(code);
+    };
+  }
+  function resumeTable(code) {
+    leftCode = null;
+    loading('Kembali ke meja ' + code + '…');
+    justResumed = true;
+    socket.emit('resume', null, (res) => {
+      setPending(null);
+      if (res && res.error) { loaded(); justResumed = false; toast(res.error, true); goHome(); }
+    });
+  }
+  function abandonTable(code) {
+    leftCode = code;
+    socket.emit('abandon', null, () => {});
+    setPending(null);
+    goHome();
+    toast('Kamu keluar dari permainan di meja ' + code);
+  }
+  // About to sit down somewhere else while still seated at another table: that table is left for good.
+  async function okToSwitch(target) {
+    if (!pending || pending.code === target) return true;
+    const ok = await ask({ title: 'Masih tercatat di meja ' + pending.code, text: 'Pindah meja berarti keluar dari permainan di meja ' + pending.code + ' (kartumu tidak dimainkan lagi, poin tetap dihitung). Lanjut?', ok: 'Pindah', cancel: 'Batal' });
+    if (ok) setPending(null);
+    return ok;
   }
   socket.io.on('reconnect_attempt', () => { if (!socket.connected && $('#conn').classList.contains('hidden')) connLost(); });
 
@@ -235,11 +353,19 @@
   socket.on('toast', ({ msg, error }) => toast(msg, error));
   socket.on('kicked', () => { V = null; toast('Kamu dikeluarkan dari meja', true); setRoomUrl(null); showHome(); });
   let leftCode = null; // ignore late updates from a table we just left
+  let justResumed = false;
   socket.on('state', (v) => {
     if (leftCode && v.code === leftCode) return;
     leftCode = null;
+    loaded();
     const prev = V;
     V = v;
+    if (justResumed) { // back at the table: tell them where they stand
+      justResumed = false;
+      const mine = v.seats[v.you];
+      if (v.waitNext) toast('Kamu kembali di tengah game. Ikut lagi di game berikutnya.');
+      else if (v.state === 'playing' && mine && mine.passed) toast('Giliranmu sudah dilewati di ronde ini. Ikut lagi di ronde berikutnya.');
+    }
     syncRules(v);
     deadline = Date.now() + v.remaining;
     if (!prev || prev.code !== v.code) { setRoomUrl(v.code); }
@@ -286,6 +412,7 @@
   function showHome() {
     $('#home').classList.remove('hidden');
     $('#table').classList.add('hidden');
+    renderPending();
     renderAccount();
     requestAnimationFrame(() => fitText($('#home')));
   }
@@ -324,13 +451,14 @@
     if (authMode === 'signup') body.name = $('#authName').value.trim();
     if (!body.username || !body.password) return toast('Isi username dan password', true);
     $('#authBtn').disabled = true;
+    loading(authMode === 'signup' ? 'Membuat akun…' : 'Masuk…');
     try {
       const d = await api(authMode === 'signup' ? '/signup' : '/login', { method: 'POST', body });
       authToken = d.token; store.set('auth', authToken); me.user = d.user;
       $('#authPass').value = '';
       toast(authMode === 'signup' ? 'Akun dibuat. Selamat datang, ' + d.user.name + '!' : 'Selamat datang, ' + d.user.name + '!');
       hello();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { loaded(); toast(e.message, true); }
     finally { $('#authBtn').disabled = false; }
   };
   function logoutLocal() {
@@ -382,6 +510,16 @@
       if (i) { i.focus(); i.select(); i.onkeydown = (e) => e.key === 'Enter' && $('#askOk').click(); }
     });
   }
+  // Several choices (stacked buttons); resolves with the picked option's value.
+  function choose({ title, text, options }) {
+    return new Promise((resolve) => {
+      const el = $('#ask');
+      el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">' + esc(title) + '</div>' + (text ? [].concat(text).map((t) => '<p>' + esc(t) + '</p>').join('') : '') +
+        '<div class="choices">' + options.map((o, i) => '<button class="btn ' + (o.cls || 'ghost dark') + '" data-i="' + i + '">' + esc(o.label) + (o.note ? '<small>' + esc(o.note) + '</small>' : '') + '</button>').join('') + '</div></div>';
+      el.classList.remove('hidden');
+      el.querySelectorAll('[data-i]').forEach((b) => (b.onclick = () => { el.classList.add('hidden'); el.innerHTML = ''; resolve(options[+b.dataset.i].value); }));
+    });
+  }
   async function askMult(cur) {
     const v = await ask({ title: 'Pengali Custom', text: 'Masukkan pengali (1 - 1.000.000)', input: cur || '', ok: 'Simpan' });
     if (v == null) return 0;
@@ -403,15 +541,21 @@
   $('#tiers').onclick = async (e) => {
     const t = e.target.closest('.tier'); if (!t || needLogin()) return;
     const mult = +t.dataset.mult || await askMult();
-    if (!mult) return;
+    if (!mult || !(await okToSwitch(null))) return;
     unlockAudio();
     const choice = rulesChoice();
-    socket.emit('create', { mult, rules: choice.rules, rulesName: choice.name }, (res) => res && res.error && toast(res.error, true));
+    loading('Menyiapkan meja…');
+    socket.emit('create', { mult, rules: choice.rules, rulesName: choice.name }, (res) => { if (res && res.error) { loaded(); toast(res.error, true); } });
   };
-  function joinRoom(code) {
-    if (String(code).toUpperCase() === leftCode) leftCode = null;
+  async function joinRoom(code) {
+    code = String(code).toUpperCase();
+    if (!(await okToSwitch(code))) return;
+    if (code === leftCode) leftCode = null;
+    if (pending && pending.code === code) justResumed = true;
+    loading('Masuk ke meja ' + code + '…');
     socket.emit('join', { code }, (res) => {
-      if (res && res.error) { toast(res.error, true); setRoomUrl(null); showHome(); }
+      if (res && res.error) { loaded(); toast(res.error, true); setRoomUrl(null); showHome(); }
+      else setPending(null);
     });
   }
   $('#joinBtn').onclick = () => {
@@ -439,6 +583,7 @@
     renderHand();
     renderActions();
     renderResult(prev);
+    checkDropPrompt();
     renderVote();
     renderFinal();
     if (!$('#history').classList.contains('hidden')) renderHistory();
@@ -464,6 +609,7 @@
     if (p.bot) tags.push('<span class="tag bot">BOT</span>');
     if (V.state === 'result' && p.ready) tags.push('<span class="tag ready">SIAP</span>');
     if (p.sitOut) tags.push('<span class="tag away">TIDAK LANJUT</span>');
+    else if (p.paused) tags.push('<span class="tag paused">⏸ JEDA</span>');
     else if (!p.connected) tags.push('<span class="tag">OFFLINE</span>');
     const showCount = playing && p.inGame && !isMe;
     const kick = V.host === V.you && !isMe && !playing ? '<div class="seat-acts"><button data-kick="' + seat + '">Keluarkan</button></div>' : '';
@@ -491,7 +637,7 @@
     }
     if (b.dataset.bot) socket.emit('addBot', { seat: +b.dataset.bot });
     if (b.dataset.kick) socket.emit('kick', { seat: +b.dataset.kick });
-    if (b.dataset.inv) share();
+    if (b.dataset.inv) openFriends('online');
   });
 
   const SEAT_VEC = [[0, 40], [38, -5], [0, -38], [-38, -5]]; // where plays fly in from, in units of --u
@@ -573,6 +719,7 @@
   function renderHand() {
     const el = $('#hand');
     if (press && press.moving) { pendingHand = true; return; } // don't rebuild under a dragged card
+    if (V && V.state === 'playing' && V.waitNext) { el.innerHTML = '<div class="wait-next">⏳ Kamu kembali di tengah game. Ikut lagi di game berikutnya.</div>'; return; }
     if (!V || V.state !== 'playing' || !V.hand.length) { el.innerHTML = ''; return; }
     syncHandOrder();
     const n = handOrder.length;
@@ -787,7 +934,8 @@
     const r = V.result;
     const iWon = r.winner === V.you;
     const meReady = V.seats[V.you] && V.seats[V.you].ready;
-    const away = V.seats.filter((p) => p && p.away); // offline / not continuing: they don't hold the table up
+    const away = V.seats.filter((p) => p && p.away && !p.paused); // offline / not continuing: they leave if the others go on
+    const paused = V.seats.filter((p) => p && p.paused); // "back later": keep their seat, skip games until they return
     const awayNames = away.map((p) => p.name).join(', ');
     const waiting = V.seats.filter((p) => p && !p.away && !p.ready).map((p) => p.name);
     const canEnd = V.host === V.you || V.hostAway || away.length;
@@ -811,6 +959,7 @@
         '<div class="delta tot ' + (row.total <= 0 ? 'pos' : 'neg') + '">' + pts(row.total) + '<small>' + num(row.total * r.mult) + '</small></div></div>').join('') + '</div>' +
       (away.length ? '<div class="away-note">⚠️ ' + esc(away.map((p) => p.name + (p.sitOut ? ' tidak melanjutkan' : ' offline')).join(', ')) +
         '. Jika lanjut, ' + esc(awayNames) + ' dikeluarkan dari meja (poin tetap dihitung di hasil akhir).</div>' : '') +
+      (paused.length ? '<div class="away-note paused">⏸️ ' + esc(paused.map((p) => p.name).join(', ')) + ' keluar sementara: kursinya tetap, ikut lagi di game berikutnya setelah kembali.</div>' : '') +
       '<div class="result-foot">' + (meReady ? '<span class="wait">Sudah konfirmasi. Menunggu: ' + esc(waiting.join(', ') || '-') + '</span>'
         : '<button class="btn green" id="readyBtn">✔ ' + (away.length ? 'Lanjut tanpa ' + esc(awayNames) : 'Konfirmasi &amp; Lanjut') + '</button>') +
       (canEnd ? '<button class="btn red small" id="endBtn">🏁 Akhiri Permainan</button>' : '') +
@@ -820,10 +969,6 @@
     $('#resHist').onclick = openHistory;
     el.querySelectorAll('[data-adj]').forEach((b) => (b.onclick = () => pickExtraPoint(+b.dataset.adj)));
     el.querySelectorAll('[data-unadj]').forEach((b) => (b.onclick = () => socket.emit('adjust', { op: 'remove', seat: +b.dataset.unadj, id: b.dataset.id }, (res) => res && res.error && toast(res.error, true))));
-    if (away.length && !meReady && !V.endVote) {
-      const key = V.code + ':' + V.gameNo + ':' + away.map((p) => p.name).join(',');
-      if (key !== contKey) { contKey = key; setTimeout(() => promptContinue(key), 1200); } // let the result show first
-    }
   }
 
   // House point items from the table rules, given by hand by the table creator / host.
@@ -843,22 +988,48 @@
     }));
   }
 
-  // Someone went offline or chose not to continue: the players still here decide whether to go on without them.
+  // Someone left the game for good (or went offline after a game): the players still here are asked whether
+  // to go on without them or end the session. During a game it is asked right away; after a game, before the next one.
   let contKey = '';
+  const acked = new Set(); // players I already agreed to continue without
+  const dropKey = (p) => V.code + ':' + p.name;
+  function dropped() {
+    if (!V || V.you < 0 || V.endVote) return [];
+    const mine = V.seats[V.you];
+    if (!mine || mine.away) return [];
+    if (V.state === 'playing') return V.seats.filter((p) => p && p.sitOut);
+    if (V.state === 'result' && !mine.ready) return V.seats.filter((p) => p && p.away && !p.paused);
+    return [];
+  }
+  function checkDropPrompt() {
+    const list = dropped();
+    const fresh = list.filter((p) => !acked.has(dropKey(p)));
+    if (!fresh.length) return;
+    const key = V.code + ':' + V.state + ':' + V.gameNo + ':' + list.map((p) => p.name).join(',');
+    if (key === contKey) return;
+    contKey = key;
+    setTimeout(() => promptContinue(key), V.state === 'result' ? 1200 : 300); // let the result show first
+  }
   async function promptContinue(key) {
-    const still = () => V && V.state === 'result' && !V.endVote && V.seats[V.you] && !V.seats[V.you].ready && contKey === key;
+    const still = () => contKey === key && dropped().length;
     if (!still()) return;
-    const away = V.seats.filter((p) => p && p.away);
-    if (!away.length) return;
-    const names = away.map((p) => p.name).join(', ');
+    const list = dropped();
+    const names = list.map((p) => p.name).join(', ');
+    const playing = V.state === 'playing';
     const ok = await ask({
       title: '▶️ Lanjutkan Permainan?',
-      text: [away.map((p) => p.name + (p.sitOut ? ' tidak melanjutkan permainan' : ' sedang offline')).join(', ') + '.',
-        'Lanjutkan dengan pemain yang tersisa? ' + names + ' akan dikeluarkan dari meja, poinnya tetap dihitung di hasil akhir.'],
+      text: playing
+        ? [names + ' keluar dari permainan. Kartunya tidak dimainkan lagi tapi tetap dihitung poinnya.',
+          'Lanjutkan permainan tanpa ' + names + '? Setelah game ini mereka dikeluarkan dari meja. Jika diakhiri, game yang belum selesai tidak dihitung.']
+        : [list.map((p) => p.name + (p.sitOut ? ' tidak melanjutkan permainan' : ' sedang offline')).join(', ') + '.',
+          'Lanjutkan dengan pemain yang tersisa? ' + names + ' akan dikeluarkan dari meja, poinnya tetap dihitung di hasil akhir.'],
       ok: 'Lanjutkan', cancel: 'Akhiri Permainan',
     });
     if (!still()) return;
-    socket.emit(ok ? 'ready' : 'proposeEnd');
+    if (ok) {
+      list.forEach((p) => acked.add(dropKey(p)));
+      if (V.state === 'result') socket.emit('ready');
+    } else socket.emit('proposeEnd');
   }
 
   // ---------- end of session: vote, settlement, history ----------
@@ -1059,16 +1230,57 @@
     ['#menu', '#result', '#final', '#history', '#vote'].forEach((s) => $(s).classList.add('hidden'));
     showHome();
   }
-  function leave() {
-    leftCode = V ? V.code : null;
+  // Leaving the table: for a while ("back later": seat, cards and points stay; turns are skipped until they
+  // return) or for good (cards no longer played but counted; the others decide whether to go on).
+  async function leave() {
+    if (!V) return;
+    $('#menu').classList.add('hidden');
+    const nothingAtStake = V.state === 'final' || (V.state === 'lobby' && !(V.gameLog || []).length);
+    let mode = 'quit';
+    if (nothingAtStake) {
+      if (!(await ask({ title: '🚪 Keluar Meja?', text: 'Kamu akan keluar dari meja ' + V.code + '.', ok: 'Keluar', cancel: 'Batal' }))) return;
+    } else {
+      mode = await choose({
+        title: '🚪 Keluar Meja?',
+        text: ['Kamu akan kembali ke meja ini nanti?',
+          'Keluar sementara: kursi, kartu & poinmu tetap. Giliranmu dilewati sampai kamu kembali (kalau sudah dilewati di ronde itu, kamu ikut lagi di ronde berikutnya).',
+          'Keluar dari permainan: kartumu tidak dimainkan lagi tapi tetap dihitung poinnya. Pemain lain ditanya apakah lanjut tanpa kamu.'],
+        options: [
+          { value: 'pause', label: '⏸️ Ya, keluar sementara', cls: 'green', note: 'Aku akan kembali' },
+          { value: 'quit', label: '🚪 Tidak, keluar dari permainan', cls: 'red' },
+          { value: null, label: 'Batal', cls: 'ghost dark' },
+        ],
+      });
+      if (!mode) return;
+    }
+    const code = V.code;
+    leftCode = code;
     voiceStop();
-    socket.emit('leave', null, () => {});
+    socket.emit('leave', { mode }, () => {});
     goHome();
+    if (mode === 'pause') { setPending({ code, paused: true }); toast('⏸️ Keluar sementara dari meja ' + code + '. Ketuk "Kembali ke Meja" kapan saja.'); }
   }
   $('#shareBtn').onclick = share;
   $('#menuBtn').onclick = () => $('#menu').classList.remove('hidden');
   $('#closeMenu').onclick = () => $('#menu').classList.add('hidden');
   $('#leaveBtn').onclick = leave;
+  $('#fsBtn').classList.toggle('hidden', !device.canFullscreen);
+  // install as an app: Android / desktop Chrome offer a prompt; iPhone / iPad need Share → Add to Home Screen
+  let installEvt = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('#installBtn').classList.remove('hidden'); });
+  if (device.os === 'ios' && !device.standalone && !device.inApp) $('#installBtn').classList.remove('hidden');
+  $('#installBtn').onclick = async () => {
+    $('#menu').classList.add('hidden');
+    if (installEvt) { installEvt.prompt(); installEvt = null; $('#installBtn').classList.add('hidden'); return; }
+    ask({ title: '📲 Pasang di Layar Utama', text: ['Di Safari: ketuk tombol Bagikan (kotak dengan panah ke atas), lalu pilih "Tambah ke Layar Utama".', 'Aplikasi akan terbuka layar penuh tanpa bilah browser.'], ok: 'Mengerti', cancel: 'Tutup' });
+  };
+  $('#menuBtn').addEventListener('click', () => {
+    const i = insets();
+    $('#deviceInfo').textContent = (device.type === 'desktop' ? '💻 ' : '📱 ') + ({ ios: 'iOS', android: 'Android', windows: 'Windows', mac: 'macOS', linux: 'Linux' }[device.os] || 'Perangkat') + ' · ' +
+      ({ phone: 'HP', tablet: 'Tablet', desktop: 'Komputer' }[device.type]) + ' · ' + window.innerWidth + '×' + window.innerHeight + ' @' + (+device.dpr.toFixed(2)) + 'x' +
+      (i.t || i.r || i.b || i.l ? ' · notch ' + [i.t, i.r, i.b, i.l].map(Math.round).join('/') : '') + (device.standalone ? ' · app' : '') + (device.lite ? ' · mode ringan' : '');
+  });
+  if (device.inApp) setTimeout(() => toast('Tips: buka di Chrome / Safari supaya voice chat & layar penuh berjalan lancar'), 2500);
   $('#fsBtn').onclick = () => {
     $('#menu').classList.add('hidden');
     const d = document.documentElement;
@@ -1303,9 +1515,40 @@
     return '<div class="frow"><div class="avatar fav">' + esc(f.avatar) + '</div><div class="finfo"><div class="fname">' + esc(f.name) + ' <small>@' + esc(f.username) + '</small></div>' +
       (f.presence ? '<div class="fstatus">' + statusText(f.presence) + '</div>' : '') + '</div><div class="facts">' + actions + '</div></div>';
   }
+  // Players online right now (anyone, not only friends): invite them to my table or add them as friends.
+  let fTab = 'friends';
+  let online = { players: [], total: 0, loaded: false };
+  function loadOnline() {
+    socket.emit('online:list', null, (r) => {
+      if (!r || r.error) return;
+      online = { ...r, loaded: true };
+      if (!$('#friends').classList.contains('hidden') && fTab === 'online') renderFriends();
+    });
+  }
+  function onlineBody() {
+    const inRoom = !!(V && V.code);
+    const sent = new Set(F.outgoing.map((f) => f.id));
+    return '<div class="online-head">' + (inRoom ? '<button class="btn blue small" data-share="1">🔗 Bagikan link meja ' + esc(V.code) + '</button>' : '<span class="muted">Buat atau masuk meja dulu untuk mengundang.</span>') +
+      '<button class="btn ghost small dark" data-reload="1">↻ Muat ulang</button></div>' +
+      (!online.loaded ? '<p class="muted">Memuat pemain online…</p>'
+        : online.players.length ? online.players.map((u) => {
+          const canInvite = inRoom && u.presence.room !== V.code;
+          return friendRow(u,
+            '<button class="btn green small" data-invite="' + u.id + '"' + (canInvite ? '' : ' disabled') + '>✉️ Undang</button>' +
+            (u.friend ? '<span class="ftag">👥 Teman</span>' : sent.has(u.id) ? '<span class="ftag">Diminta</span>'
+              : '<button class="btn ghost small dark" data-addu="' + esc(u.username) + '">＋ Teman</button>'));
+        }).join('') + (online.total > online.players.length ? '<p class="muted">+' + (online.total - online.players.length) + ' pemain lain online</p>' : '')
+        : '<p class="muted">Belum ada pemain lain yang online. Bagikan link meja ke teman!</p>');
+  }
   function renderFriends() {
     const inRoom = !!(V && V.code);
-    const body =
+    const tabs = '<div class="ftabs"><button data-ftab="friends" class="' + (fTab === 'friends' ? 'on' : '') + '">👥 Teman (' + F.friends.length + ')</button>' +
+      '<button data-ftab="online" class="' + (fTab === 'online' ? 'on' : '') + '">🌐 Pemain Online' + (online.loaded ? ' (' + online.total + ')' : '') + '</button></div>';
+    if (fTab === 'online') {
+      $('#friends').innerHTML = panel('👥 Teman & Pemain Online', tabs + onlineBody());
+      return;
+    }
+    const body = tabs +
       '<form class="add-friend" onsubmit="return false"><input id="addFriendInput" placeholder="Username teman" autocapitalize="off" spellcheck="false" maxlength="21">' +
       '<button id="addFriendBtn" type="submit" class="btn green small">＋ Tambah</button></form>' +
       (F.incoming.length ? '<h4>Permintaan Pertemanan</h4>' + F.incoming.map((f) => friendRow(f,
@@ -1322,22 +1565,30 @@
       (F.outgoing.length ? '<h4>Menunggu Konfirmasi</h4>' + F.outgoing.map((f) => friendRow(f, '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="cancel">Batalkan</button>')).join('') : '');
     const el = $('#friends');
     const keep = el.querySelector('#addFriendInput') ? el.querySelector('#addFriendInput').value : '';
-    el.innerHTML = panel('👥 Teman', body);
+    el.innerHTML = panel('👥 Teman & Pemain Online', body);
     $('#addFriendInput').value = keep;
   }
-  function openFriends() {
+  function openFriends(tab) {
     if (needLogin()) return;
+    if (typeof tab === 'string') fTab = tab;
     renderFriends();
     $('#friends').classList.remove('hidden');
     refreshFriends();
+    loadOnline();
   }
-  $('#friendsBtn').onclick = openFriends;
-  $('#friendsBtnTable').onclick = openFriends;
+  $('#friendsBtn').onclick = () => openFriends();
+  $('#friendsBtnTable').onclick = () => openFriends();
   $('#friends').addEventListener('click', async (e) => {
     if (e.target.classList.contains('x') || e.target.id === 'friends') return $('#friends').classList.add('hidden');
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.ftab) { fTab = b.dataset.ftab; renderFriends(); if (fTab === 'online') loadOnline(); return; }
+    if (b.dataset.share) return share();
+    if (b.dataset.reload) { online.loaded = false; renderFriends(); return loadOnline(); }
     try {
-      if (b.id === 'addFriendBtn') {
+      if (b.dataset.addu) {
+        const r = await api('/friends', { method: 'POST', body: { username: b.dataset.addu } });
+        toast(r.message);
+      } else if (b.id === 'addFriendBtn') {
         const username = $('#addFriendInput').value.trim();
         if (!username) return toast('Ketik username teman', true);
         const r = await api('/friends', { method: 'POST', body: { username } });
@@ -1353,7 +1604,7 @@
       } else if (b.dataset.chat) {
         openDm(+b.dataset.chat);
       } else if (b.dataset.invite) {
-        socket.emit('invite', { friendId: +b.dataset.invite }, (r) => toast(r && r.error ? r.error : 'Undangan terkirim ✉️', !!(r && r.error)));
+        socket.emit('invite', { userId: +b.dataset.invite }, (r) => toast(r && r.error ? r.error : 'Undangan terkirim ✉️', !!(r && r.error)));
       }
       refreshFriends();
     } catch (err) { toast(err.message, true); }
@@ -1371,15 +1622,17 @@
   });
   socket.on('invite', async (inv) => {
     sfx.turn();
-    const playing = V && V.state === 'playing';
+    const elsewhere = V && V.code !== inv.room && (V.state === 'playing' || V.state === 'result' || (V.gameLog || []).length);
     const ok = await ask({
       title: '✉️ Undangan Main',
-      text: inv.from.name + ' mengundangmu ke meja ' + inv.room + ' (x' + num(inv.mult) + ', ' + inv.players + '/4 pemain).' + (playing ? ' Kamu sedang main, kartumu akan dimainkan bot jika pindah.' : ''),
+      text: [inv.from.name + ' (@' + inv.from.username + ')' + (inv.friend ? '' : ' · bukan teman') + ' mengundangmu ke meja ' + inv.room + ' (x' + num(inv.mult) + ', ' + inv.players + '/4 pemain).',
+        ...(elsewhere ? ['Kalau gabung, kamu keluar dari permainan di meja ' + V.code + ' (kartumu tidak dimainkan lagi, poin tetap dihitung).'] : [])],
       ok: 'Gabung', cancel: 'Nanti',
     });
     if (!ok) return;
     if (V && V.code === inv.room) return;
     voiceStop();
+    if (V) { leftCode = V.code; V = null; } // the server moves us from the old table
     joinRoom(inv.room);
   });
 
@@ -1751,5 +2004,6 @@
 
   layout();
   showHome();
+  splashStep(socket.connected ? 'Memuat akunmu…' : 'Menghubungkan ke server…', socket.connected ? 75 : 45);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitText()); // web font changes text widths
 })();
