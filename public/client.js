@@ -638,7 +638,6 @@
     const v = V;
     $('#roomCode').textContent = v.code;
     $('#stakeLbl').textContent = 'x' + num(v.mult);
-    $('#potVal').textContent = 'x' + num(v.mult);
     $('#soundBtn').textContent = muted ? '🔇' : '🔊';
     const order = G.suitsAscending.slice().reverse().join(' › ');
     document.querySelectorAll('.suit-order').forEach((e) => (e.textContent = order));
@@ -743,18 +742,18 @@
     el.classList.remove('hidden');
     const isHost = V.host === V.you;
     const n = V.seats.filter(Boolean).length;
+    // compact panel in the middle of the felt (the multiplier is shown once, under the table code at the top left)
     el.innerHTML =
-      '<h3>Kode Meja</h3><div class="code">' + V.code + '</div>' +
-      '<div class="sub">Bagikan kode/link ke teman. ' + n + '/4 pemain di meja. Pengali x' + num(V.mult) + '</div>' +
+      '<div class="lp-head"><span class="lp-lbl">Kode Meja</span><span class="code">' + V.code + '</span><span class="lp-count">' + n + '/4</span></div>' +
       '<div class="row rules-row"><span class="rules-sum">📋 ' + esc(rulesLabel(V.rules, V.rulesName)) + '</span>' +
-      (V.canEditRules ? '<button class="btn ghost small" id="lobbyRules">⚙️ Atur Aturan</button>' : '<button class="btn ghost small" id="lobbyRules">Lihat Aturan</button>') + '</div>' +
+      (V.canEditRules ? '<button class="btn ghost small" id="lobbyRules">⚙️ Atur</button>' : '<button class="btn ghost small" id="lobbyRules">Lihat</button>') + '</div>' +
       (isHost
         ? '<div class="stake-pick">' + V.mults.map((m) => '<button data-mult="' + m + '" class="' + (m === V.mult ? 'on' : '') + '">x' + num(m) + '</button>').join('') +
           '<button data-mult="custom" class="' + (V.mults.includes(V.mult) ? '' : 'on') + '">' + (V.mults.includes(V.mult) ? 'Custom' : 'x' + num(V.mult)) + '</button></div>' +
-          '<div class="row"><button class="btn blue small" id="lobbyShare">🔗 Undang Teman</button><button class="btn green" id="startBtn"' + (n < 2 ? ' disabled' : '') + '>Mulai Main</button>' +
+          '<div class="row"><button class="btn blue small" id="lobbyShare">🔗 Undang</button><button class="btn green small" id="startBtn"' + (n < 2 ? ' disabled' : '') + '>Mulai Main</button>' +
           (V.seats.some((p) => p && p.games) ? '<button class="btn ghost small" id="resetBtn">Reset Poin</button>' : '') + '</div>' +
-          (n < 2 ? '<div class="sub" style="margin-top:6px">Tunggu teman atau tambah Bot di kursi kosong</div>' : '')
-        : '<div class="row"><button class="btn blue small" id="lobbyShare">🔗 Undang Teman</button></div><div class="sub" style="margin-top:6px">Menunggu host memulai…</div>');
+          '<div class="sub">' + (n < 2 ? 'Tambah teman atau Bot di kursi kosong' : 'Bagikan kode / link ke teman') + '</div>'
+        : '<div class="row"><button class="btn blue small" id="lobbyShare">🔗 Undang</button></div><div class="sub">Menunggu host memulai…</div>');
     const sb = $('#startBtn'); if (sb) sb.onclick = () => { unlockAudio(); socket.emit('start'); };
     const rb = $('#resetBtn'); if (rb) rb.onclick = async () => (await ask({ title: 'Reset Poin?', text: 'Semua poin dan riwayat akan direset ke 0.', ok: 'Reset' })) && socket.emit('resetScores');
     $('#lobbyShare').onclick = share;
