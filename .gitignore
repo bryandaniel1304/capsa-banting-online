@@ -3,3 +3,5 @@ node_modules
 data
 .env
 ._*
+app/node_modules
+*.apk

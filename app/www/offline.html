@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Capsa Banting</title>
+<style>
+  html, body { margin: 0; height: 100%; background: radial-gradient(ellipse at center, #10402c, #07110d 70%); color: #f3ead4; font-family: system-ui, sans-serif; }
+  .box { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 0 24px; }
+  h1 { margin: 0; font-family: Georgia, serif; letter-spacing: .08em; color: #f6e3a1; font-size: 28px; }
+  p { margin: 0; opacity: .85; max-width: 460px; line-height: 1.4; }
+  button { margin-top: 6px; padding: 12px 34px; border-radius: 999px; border: 0; font-weight: 800; letter-spacing: .06em; font-size: 15px; color: #2a1d05; background: linear-gradient(180deg, #f6e3a1, #d8b45a 60%, #a8822f); }
+  small { opacity: .6; }
+</style></head>
+<body><div class="box">
+  <h1>CAPSA BANTING</h1>
+  <p>Tidak bisa terhubung ke server. Periksa koneksi internet kamu.<br>Server juga bisa butuh ±30 detik untuk bangun kalau lama tidak dipakai.</p>
+  <button onclick="retry()">COBA LAGI</button>
+  <small id="auto"></small>
+</div>
+<script>
+  const URL_ = 'https://capsa-banting-online.onrender.com';
+  function retry() { location.href = URL_; }
+  let n = 15; const el = document.getElementById('auto');
+  setInterval(() => { n--; el.textContent = 'Mencoba lagi otomatis dalam ' + n + ' detik'; if (n <= 0) retry(); }, 1000);
+</script></body></html>

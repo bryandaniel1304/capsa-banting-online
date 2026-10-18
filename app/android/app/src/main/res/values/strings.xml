@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Capsa Banting</string>
+    <string name="title_activity_main">Capsa Banting</string>
+    <string name="package_name">id.capsabanting.online</string>
+    <string name="custom_url_scheme">id.capsabanting.online</string>
+</resources>

@@ -103,3 +103,14 @@ Tap a player at the table to see their profile and stats, and add them as a frie
 - `shared/rules.js`: card ranking, combination evaluation, hints and bot logic (shared with the browser).
 - `public/`: the mobile web client (`index.html`, `style.css`, `client.js`).
 - `test/sim.js`: rules unit checks plus a full multiplayer simulation (`npm test`).
+## Android app (`app/`)
+A Capacitor shell that opens the live server full screen in landscape (mic allowed for voice chat, screen stays on,
+offline page with auto-retry). Because it loads the server URL, every Render deploy reaches the app without reinstalling.
+```
+cd app
+npm install
+npm run icons      # only after changing make-icons.js
+npm run apk        # -> android/app/build/outputs/apk/debug/app-debug.apk
+```
+Needs JDK 17 and the Android SDK (`ANDROID_HOME`). On Windows, if Gradle fails with "Unable to establish loopback connection",
+set `TEMP`/`TMP` to a short path such as `C:\tmp`.

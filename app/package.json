@@ -1,0 +1,20 @@
+{
+  "name": "capsa-banting-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android app shell for Capsa Banting Online (loads the live server)",
+  "scripts": {
+    "icons": "node make-icons.js && capacitor-assets generate --android --iconBackgroundColor #07110d --splashBackgroundColor #07110d",
+    "sync": "cap sync android",
+    "apk": "cap sync android && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/core": "^6.2.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.2.2",
+    "sharp": "^0.35.5"
+  }
+}

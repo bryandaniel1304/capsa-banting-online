@@ -50,13 +50,14 @@
     const short = Math.min(screen.width, screen.height);
     const mobileHint = uad && typeof uad.mobile === 'boolean' ? uad.mobile : /Mobi|iPhone|iPod/.test(ua);
     const type = !touch ? 'desktop' : (mobileHint || short < 600) ? 'phone' : 'tablet';
-    const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
-    const inApp = /FBAN|FBAV|Instagram|Line\/|WhatsApp|TikTok|Snapchat|; wv\)/i.test(ua); // in-app browsers: no fullscreen / install
+    const app = /CapsaBantingApp/.test(ua); // our own Android app (full screen, landscape, mic allowed)
+    const standalone = app || matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+    const inApp = !app && /FBAN|FBAV|Instagram|Line\/|WhatsApp|TikTok|Snapchat|; wv\)/i.test(ua); // in-app browsers: no fullscreen / install
     const mem = navigator.deviceMemory || null, cores = navigator.hardwareConcurrency || null;
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const lite = reduce || (mem != null && mem <= 3) || (type === 'phone' && android && cores != null && cores <= 4);
     const canFullscreen = !!document.documentElement.requestFullscreen && !ios && !inApp && !standalone;
-    return { os, type, standalone, inApp, lite, canFullscreen, dpr: window.devicePixelRatio || 1, mem, cores };
+    return { os, type, app, standalone, inApp, lite, canFullscreen, dpr: window.devicePixelRatio || 1, mem, cores };
   })();
   {
     const root = document.documentElement;
