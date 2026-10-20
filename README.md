@@ -104,13 +104,33 @@ Tap a player at the table to see their profile and stats, and add them as a frie
 - `public/`: the mobile web client (`index.html`, `style.css`, `client.js`).
 - `test/sim.js`: rules unit checks plus a full multiplayer simulation (`npm test`).
 ## Android app (`app/`)
-A Capacitor shell that opens the live server full screen in landscape (mic allowed for voice chat, screen stays on,
-offline page with auto-retry). Because it loads the server URL, every Render deploy reaches the app without reinstalling.
+A Capacitor 8 shell (targets Android 16 / API 36, as Google Play requires) that opens the live server full screen in
+landscape (mic allowed for voice chat, screen stays on, offline page with auto-retry). Because it loads the server URL,
+every Render deploy reaches the app without a new release.
 ```
 cd app
 npm install
 npm run icons      # only after changing make-icons.js
-npm run apk        # -> android/app/build/outputs/apk/debug/app-debug.apk
+npm run apk        # debug APK  -> android/app/build/outputs/apk/debug/
+npm run aab        # Play Store -> android/app/build/outputs/bundle/release/app-release.aab
+npm run store      # Play listing images -> ../store/
 ```
-Needs JDK 17 and the Android SDK (`ANDROID_HOME`). On Windows, if Gradle fails with "Unable to establish loopback connection",
-set `TEMP`/`TMP` to a short path such as `C:\tmp`.
+Needs **JDK 21** (`JAVA_HOME`) and the Android SDK (`ANDROID_HOME`). Release builds are signed with the upload key from
+`app/android/keystore.properties` (not in git):
+```
+storeFile=C:/path/to/capsa-upload.jks
+storePassword=...
+keyAlias=upload
+keyPassword=...
+```
+On Windows, if Gradle fails with "Unable to establish loopback connection", set `TEMP`/`TMP` to a short path such as `C:	mp`.
+Play Console answers, listing text and release steps: [store/PLAY-STORE.md](store/PLAY-STORE.md).
+
+## Safety & accounts (Play Store policies)
+- Players can **block** (no friend requests, invites or DMs; their table chat is hidden) and **report** others from the profile popup.
+  Recent table chat of the reported player is attached for review.
+- Moderators are the usernames in `ADMIN_USERNAMES` (comma separated): they get **🛡️ Laporan** on the home screen to resolve
+  reports and ban accounts (signed out everywhere, login refused).
+- Accounts can be **deleted** in the app (🗑️ Hapus akun) or on `/hapus-akun`. Other players' history keeps the rows as "Akun dihapus".
+- `/privasi` and `/ketentuan` show the privacy policy and terms; `CONTACT_EMAIL` is the contact shown on them.
+- Points have no money value: the final screen shows point differences only.
