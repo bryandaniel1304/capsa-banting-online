@@ -97,6 +97,28 @@ const SCHEMA = [
     data text not null,
     updated_at timestamptz not null default now()
   )`,
+  // safety: players can block each other and report abuse; moderators can ban an account
+  `create table if not exists blocks (
+    user_id integer not null references users(id) on delete cascade,
+    blocked_id integer not null references users(id) on delete cascade,
+    created_at timestamptz not null default now(),
+    primary key (user_id, blocked_id)
+  )`,
+  'create index if not exists blocks_blocked on blocks(blocked_id)',
+  `create table if not exists reports (
+    id serial primary key,
+    reporter_id integer references users(id) on delete set null,
+    target_id integer references users(id) on delete set null,
+    target_name text not null,
+    reason text not null,
+    details text,
+    context text,
+    status text not null default 'open',
+    created_at timestamptz not null default now(),
+    resolved_at timestamptz
+  )`,
+  'create index if not exists reports_status on reports(status, id)',
+  'alter table users add column if not exists banned_at timestamptz',
   // live tables, so games survive server restarts / deploys / sleeping instances
   `create table if not exists live_rooms (
     code text primary key,
@@ -161,7 +183,7 @@ async function createSession(userId) {
 }
 async function userByToken(token) {
   if (!token || typeof token !== 'string') return null;
-  return one('select u.id, u.username, u.name, u.avatar from auth_sessions s join users u on u.id = s.user_id where s.token_hash = $1', [sha(token)]);
+  return one('select u.id, u.username, u.name, u.avatar from auth_sessions s join users u on u.id = s.user_id where s.token_hash = $1 and u.banned_at is null', [sha(token)]);
 }
 async function setPassword(userId, passHash) {
   await q('update users set pass_hash = $2 where id = $1', [userId, passHash]);
@@ -361,7 +383,62 @@ async function savePhoto(userId, mime, b64) {
 async function getPhoto(userId) { return one('select mime, data from user_photos where user_id = $1', [userId]); }
 async function deletePhoto(userId) { await q('delete from user_photos where user_id = $1', [userId]); }
 
+// ---------- safety: block / report / ban / delete account ----------
+async function block(me, other) {
+  await q('insert into blocks (user_id, blocked_id) values ($1, $2) on conflict do nothing', [me, other]);
+  await q('delete from friendships where ' + pairSql, [me, other]); // blocking also ends the friendship
+}
+async function unblock(me, other) { await q('delete from blocks where user_id = $1 and blocked_id = $2', [me, other]); }
+async function listBlocked(me) {
+  return q(`select u.id, u.username, u.name, u.avatar from blocks b join users u on u.id = b.blocked_id
+            where b.user_id = $1 order by lower(u.name)`, [me]);
+}
+// true when either side blocked the other (no friend requests, invites or messages between them)
+async function blockedEither(a, b) {
+  return !!(await one('select 1 as x from blocks where (user_id = $1 and blocked_id = $2) or (user_id = $2 and blocked_id = $1)', [a, b]));
+}
+async function blockedIds(me) { // everyone I blocked or who blocked me
+  const rows = await q('select blocked_id as id from blocks where user_id = $1 union select user_id as id from blocks where blocked_id = $1', [me]);
+  return rows.map((r) => r.id);
+}
+async function addReport({ reporterId, targetId, targetName, reason, details, context }) {
+  const r = await one(`insert into reports (reporter_id, target_id, target_name, reason, details, context)
+                       values ($1, $2, $3, $4, $5, $6) returning id`, [reporterId, targetId, targetName, reason, details || null, context || null]);
+  return r.id;
+}
+async function recentReportsBy(reporterId) {
+  return (await one("select count(*)::int as n from reports where reporter_id = $1 and created_at > now() - interval '1 hour'", [reporterId])).n;
+}
+async function listReports(status = 'open', limit = 100) {
+  return q(`select r.id, r.reason, r.details, r.context, r.status, r.created_at, r.target_id, r.target_name,
+                   t.username as target_username, t.banned_at as target_banned, rp.username as reporter_username, rp.name as reporter_name,
+                   (select count(*)::int from reports x where x.target_id = r.target_id) as target_reports
+            from reports r left join users t on t.id = r.target_id left join users rp on rp.id = r.reporter_id
+            where ($1 = 'all' or r.status = $1) order by r.id desc limit $2`, [status, limit]);
+}
+async function resolveReport(id, status) {
+  await q('update reports set status = $2, resolved_at = case when $2 = \'open\' then null else now() end where id = $1', [id, status]);
+}
+async function setBanned(userId, banned) {
+  await q('update users set banned_at = ' + (banned ? 'now()' : 'null') + ' where id = $1', [userId]);
+  if (banned) await q('delete from auth_sessions where user_id = $1', [userId]);
+}
+async function isBanned(userId) {
+  return !!(await one('select 1 as x from users where id = $1 and banned_at is not null', [userId]));
+}
+// Delete an account and everything tied to it. Other players' saved games keep the rows, but the name is
+// replaced, so nothing in their history points back to this person.
+async function deleteAccount(userId) {
+  const label = 'Akun dihapus ' + crypto.randomBytes(2).toString('hex');
+  await q('update match_players set name = $2, avatar = null where user_id = $1', [userId, label]);
+  await q('update game_players set name = $2 where user_id = $1', [userId, label]);
+  await q('update reports set target_name = $2 where target_id = $1', [userId, label]);
+  await q('delete from users where id = $1', [userId]); // sessions, friends, messages, presets, photo, blocks cascade
+  return label;
+}
+
 module.exports = {
+  block, unblock, listBlocked, blockedEither, blockedIds, addReport, recentReportsBy, listReports, resolveReport, setBanned, isBanned, deleteAccount,
   savePhoto, getPhoto, deletePhoto,
   publicUser, relation, listPresets, countPresets, savePreset, deletePreset,
   saveLiveRoom, deleteLiveRoom, liveRoomByCode, liveRoomForPlayer, pruneLiveRooms,

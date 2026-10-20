@@ -1,5 +1,6 @@
 // Capsa Banting Online — authoritative realtime game server (Express + Socket.IO).
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -20,9 +21,23 @@ const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻',
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api', accounts.router({ presenceOf: (id) => presenceOf(id), emitToUser: (id, ev, data) => emitToUser(id, ev, data), onProfile: (u) => profileChanged(u) }));
+app.use('/api', accounts.router({
+  presenceOf: (id) => presenceOf(id), emitToUser: (id, ev, data) => emitToUser(id, ev, data), onProfile: (u) => profileChanged(u),
+  onAccountGone: (id, opts) => accountGone(id, opts), reportContext: (targetId, reporterId) => reportContext(targetId, reporterId),
+}));
 app.get('/rules.js', (_, res) => res.sendFile(path.join(__dirname, 'shared', 'rules.js')));
 app.get('/healthz', (_, res) => res.send('ok'));
+// Privacy policy, terms and account deletion (linked from the app and the Play Store listing).
+// CONTACT_EMAIL is the developer contact shown on these pages.
+const LEGAL = { '/privasi': 'privasi.html', '/ketentuan': 'ketentuan.html', '/hapus-akun': 'hapus-akun.html' };
+const LEGAL_UPDATED = '21 Oktober 2026';
+for (const [route, file] of Object.entries(LEGAL)) {
+  app.get(route, (_, res) => {
+    const contact = String(process.env.CONTACT_EMAIL || '').replace(/[<>"&]/g, '') || 'menu 🚩 Laporkan di aplikasi';
+    const html = fs.readFileSync(path.join(__dirname, 'legal', file), 'utf8').split('{{CONTACT}}').join(contact).split('{{UPDATED}}').join(LEGAL_UPDATED);
+    res.set('Cache-Control', 'no-cache').type('html').send(html);
+  });
+}
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' }, pingInterval: 10000, pingTimeout: 20000 });
 
@@ -56,6 +71,26 @@ function profileChanged(u) {
   const room = rooms.get(tokenRoom.get('u:' + u.id));
   const p = room && room.seats[seatOf(room, 'u:' + u.id)];
   if (p) { p.avatar = u.avatar; p.name = clean(u.name, 14) || p.name; broadcast(room); }
+}
+// An account was deleted or banned: sign its devices out. A deleted account also loses its name at a live table,
+// and its seat no longer points to the (now missing) user, so the game can still be saved for the others.
+function accountGone(userId, { deleted, label } = {}) {
+  io.to('user:' + userId).emit('account:gone', { deleted: !!deleted });
+  const room = rooms.get(tokenRoom.get('u:' + userId));
+  if (room && deleted) {
+    const p = room.seats[seatOf(room, 'u:' + userId)];
+    if (p) { p.name = label || 'Akun dihapus'; p.avatar = '❔'; p.userId = null; }
+    for (const d of room.departed || []) if (d.userId === userId) { d.userId = null; d.name = label || 'Akun dihapus'; d.avatar = '❔'; }
+    broadcast(room);
+  }
+  setTimeout(() => io.in('user:' + userId).disconnectSockets(true), 300);
+}
+// Recent table chat of a reported player (what the reporter could see), attached to the report for moderators.
+function reportContext(targetId, reporterId) {
+  const room = rooms.get(tokenRoom.get('u:' + reporterId));
+  if (!room || !room.chatLog) return null;
+  const lines = room.chatLog.filter((c) => c.userId === targetId).slice(-15);
+  return lines.length ? 'Meja ' + room.code + ':\n' + lines.map((c) => new Date(c.at).toISOString().slice(11, 16) + ' ' + c.name + ': ' + c.text).join('\n') : null;
 }
 const roomPresence = (room) => room.seats.forEach((p) => p && p.userId && !p.bot && notifyPresence(p.userId));
 const lastInvite = new Map();
@@ -772,9 +807,9 @@ io.on('connection', (socket) => {
       const u = s.data.user;
       if (u && u.id !== user.id && !seen.has(u.id)) seen.set(u.id, u);
     }
-    let fids = [];
-    try { fids = await store.friendIds(user.id); } catch (e) { console.error('online', e.message); }
-    const list = [...seen.values()].map((u) => ({ ...u, friend: fids.includes(u.id), presence: presenceOf(u.id) }));
+    let fids = [], hidden = [];
+    try { [fids, hidden] = await Promise.all([store.friendIds(user.id), store.blockedIds(user.id)]); } catch (e) { console.error('online', e.message); }
+    const list = [...seen.values()].filter((u) => !hidden.includes(u.id)).map((u) => ({ ...u, friend: fids.includes(u.id), presence: presenceOf(u.id) }));
     // free players first (not at a table), then friends, then by name
     list.sort((a, b) => !!a.presence.room - !!b.presence.room || b.friend - a.friend || a.name.localeCompare(b.name));
     ack(cb, { players: list.slice(0, 60), total: list.length });
@@ -791,6 +826,7 @@ io.on('connection', (socket) => {
       const pr = presenceOf(fid);
       if (!pr.online) return ack(cb, { error: 'Pemain sedang offline' });
       if (pr.room === room.code) return ack(cb, { error: 'Pemain sudah di meja ini' });
+      if (await store.blockedEither(user.id, fid)) return ack(cb, { error: 'Tidak bisa mengundang pemain ini' });
       const friend = await store.areFriends(user.id, fid);
       const k = user.id + ':' + fid;
       if (Date.now() - (lastInvite.get(k) || 0) < 8000) return ack(cb, { error: 'Tunggu sebentar sebelum mengundang lagi' });
@@ -1080,7 +1116,12 @@ io.on('connection', (socket) => {
     lastChat = Date.now();
     const s = seatOf(room, token);
     const t = clean(text, 80);
-    if (s >= 0 && t) io.to(room.code).emit('chat', { seat: s, text: t });
+    if (s >= 0 && t) {
+      io.to(room.code).emit('chat', { seat: s, text: t });
+      const p = room.seats[s];
+      (room.chatLog = room.chatLog || []).push({ userId: p.userId || null, name: p.name, text: t, at: Date.now() });
+      if (room.chatLog.length > 60) room.chatLog.splice(0, room.chatLog.length - 60);
+    }
   });
 
   socket.on('disconnect', () => {

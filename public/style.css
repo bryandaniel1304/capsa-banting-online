@@ -544,3 +544,12 @@ html[data-device="desktop"] .hand .card:not(.sel):not(.dragging):hover { transfo
 /* phones: slightly larger tap targets for the small controls */
 html[data-device="phone"] .pill { padding: calc(var(--u) * 1.1) calc(var(--u) * 2.8); }
 html[data-device="phone"] .seat-acts button { min-height: calc(var(--u)*7); }
+
+/* account links, legal links, safety (block / report) and moderation */
+.acct-links { display: flex; justify-content: center; align-items: center; gap: calc(var(--u)*3.2); flex-wrap: wrap; }
+.legal { margin-top: calc(var(--u)*1.2); font-size: calc(var(--u)*2.6); color: var(--muted); }
+.legal a { color: var(--muted); text-underline-offset: 3px; }
+.prof-safety { display: flex; justify-content: center; gap: calc(var(--u)*4); margin-top: calc(var(--u)*1.8); }
+.prof-safety .link-btn { font-size: calc(var(--u)*2.7); }
+.mod-ctx { white-space: pre-wrap; font-size: calc(var(--u)*2.6); background: rgba(0,0,0,.35); border: 1px solid var(--line-soft); border-radius: calc(var(--u)*1.2); padding: calc(var(--u)*1) calc(var(--u)*1.6); margin: calc(var(--u)*.8) 0; color: var(--cream); }
+#mod .mcard .row { display: flex; gap: calc(var(--u)*1.6); flex-wrap: wrap; margin-top: calc(var(--u)*1); }

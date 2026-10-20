@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hapus Akun · Capsa Banting Online</title>
+<link rel="stylesheet" href="/legal/legal.css">
+</head>
+<body>
+<main>
+  <a class="back" href="/">← Kembali ke game</a>
+  <h1>Hapus Akun Capsa Banting Online</h1>
+
+  <p>Kamu bisa menghapus akun kapan saja. Yang dihapus permanen: akun (username, nama, password), foto profil, teman,
+  pesan langsung, aturan tersimpan, blokir, dan statistik. Di riwayat permainan pemain lain, namamu diganti menjadi "Akun dihapus".
+  Penghapusan tidak bisa dibatalkan.</p>
+
+  <h2>Cara 1 · di aplikasi</h2>
+  <p>Masuk ke akunmu, lalu di halaman utama ketuk <b>🗑️ Hapus akun</b> dan ketik username kamu untuk konfirmasi.</p>
+
+  <h2>Cara 2 · di halaman ini</h2>
+  <form id="f" class="card" autocomplete="on" onsubmit="return false">
+    <label>Username<input id="u" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="20" required></label>
+    <label>Password<input id="p" type="password" autocomplete="current-password" maxlength="100" required></label>
+    <label class="chk"><input id="c" type="checkbox"> Saya mengerti akun saya dihapus permanen</label>
+    <button id="go" type="submit">Hapus akun saya</button>
+    <p id="msg" class="msg" role="status"></p>
+  </form>
+
+  <h2>Lupa password?</h2>
+  <p>Jika masih masuk di salah satu perangkat, ganti password lewat <b>🔑 Ganti password</b> atau langsung hapus akun dari aplikasi.
+  Jika tidak bisa masuk sama sekali, kirim permintaan penghapusan ke <b>{{CONTACT}}</b> dengan menyebutkan username kamu.
+  Kami memprosesnya paling lambat 30 hari.</p>
+
+  <p class="links"><a href="/privasi">Kebijakan Privasi</a> · <a href="/ketentuan">Ketentuan Layanan</a></p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const say = (t, ok) => { $('msg').textContent = t; $('msg').className = 'msg ' + (ok ? 'ok' : 'err'); };
+  $('f').addEventListener('submit', async () => {
+    const username = $('u').value.trim(), password = $('p').value;
+    if (!username || !password) return say('Isi username dan password.');
+    if (!$('c').checked) return say('Centang konfirmasi dulu.');
+    $('go').disabled = true; say('Memproses…', true);
+    try {
+      const post = (path, body, token, method = 'POST') => fetch('/api' + path, {
+        method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body),
+      }).then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'Gagal'); return d; });
+      const { token } = await post('/login', { username, password });
+      await post('/me', { confirm: username }, token, 'DELETE');
+      $('p').value = '';
+      say('Akun @' + username + ' sudah dihapus permanen.', true);
+    } catch (e) { say(e.message); $('go').disabled = false; }
+  });
+</script>
+</body>
+</html>

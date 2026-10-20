@@ -57,7 +57,11 @@
             <button id="myHistBtn" class="btn blue small">📊 Riwayat Saya</button>
             <button id="friendsBtn" class="btn orange small">👥 Teman <span class="badge hidden"></span></button>
           </div>
-          <button id="pwBtn" class="link-btn" type="button">🔑 Ganti password</button>
+          <div class="acct-links">
+            <button id="pwBtn" class="link-btn" type="button">🔑 Ganti password</button>
+            <button id="delAcctBtn" class="link-btn" type="button">🗑️ Hapus akun</button>
+            <button id="modBtn" class="link-btn hidden" type="button">🛡️ Laporan</button>
+          </div>
         </div>
         <button id="rulesBtnHome" class="btn ghost small">📋 Aturan &amp; Cara Main</button>
       </div>
@@ -66,7 +70,8 @@
         <div class="tiers-sub">Pilih pengali · nilai = poin × pengali</div>
         <div id="tiers" class="tiers"></div>
         <button id="rulesChoiceBtn" class="rules-choice" type="button"><span class="rc-lbl">Aturan meja</span><span id="rulesChoiceName" class="rc-name">Aturan Default</span><span class="rc-edit">⚙️ Atur</span></button>
-        <div class="home-note">Tanpa koin — setiap game dihitung poin, semakin rendah semakin bagus. Ajak teman dengan kode atau link meja.</div>
+        <div class="home-note">Tanpa koin — setiap game dihitung poin, semakin rendah semakin bagus. Poin hanya untuk hiburan, tidak bernilai uang. Ajak teman dengan kode atau link meja.</div>
+        <div class="legal"><a href="/privasi">Kebijakan Privasi</a> · <a href="/ketentuan">Ketentuan</a> · <a href="/hapus-akun">Hapus Akun</a></div>
       </div>
     </div>
   </section>
@@ -150,6 +155,7 @@
   <div id="myHist" class="overlay hidden"></div>
   <div id="friends" class="overlay hidden"></div>
   <div id="dm" class="overlay hidden"></div>
+  <div id="mod" class="overlay hidden"></div>
   <div id="ask" class="overlay hidden"></div>
   <div id="loading" class="loading hidden"><div class="ld-box"><div class="spin-chip small"><div class="spin-face">♠</div></div><div id="loadingMsg" class="ld-msg">Memuat…</div></div></div>
   <div id="toasts"></div>

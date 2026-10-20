@@ -27,6 +27,7 @@
   // account session (token from /api/login or /api/signup)
   let authToken = store.get('auth', null);
   const me = { user: null, stats: null };
+  let blockedIds = new Set(), blockedList = []; // players I blocked (their table chat is hidden)
   async function api(path, opts = {}) {
     const res = await fetch('/api' + path, {
       method: opts.method || 'GET',
@@ -425,7 +426,17 @@
       toast('♠ ' + (p ? p.name : '') + ' mengeluarkan 2♠, langsung main lagi');
     }
   });
-  socket.on('chat', ({ seat, text }) => bubble(seat, text));
+  socket.on('chat', ({ seat, text }) => {
+    const p = V && V.seats[seat];
+    if (p && p.userId && blockedIds.has(p.userId)) return; // blocked player: hidden for me
+    bubble(seat, text);
+  });
+  // this account was deleted (here or on another device) or banned by a moderator
+  socket.on('account:gone', ({ deleted }) => {
+    logoutLocal();
+    if (V) goHome();
+    toast(deleted ? 'Akun kamu sudah dihapus.' : 'Akun ini diblokir karena melanggar aturan main.', !deleted);
+  });
 
   function setRoomUrl(code) {
     const u = new URL(location.href);
@@ -453,7 +464,7 @@
     return '<div class="st"><b class="fit" title="' + esc(value) + '"' + (short ? ' data-short="' + esc(short) + '"' : '') + '>' + esc(value) + '</b><span>' + label + '</span></div>';
   };
   const statsHTML = (s) => stat('Game', num(s.games || 0), s.games || 0) + stat('Menang', num(s.wins || 0), s.wins || 0) + stat('Total poin', pts(s.points || 0), s.points || 0) +
-    stat('Sesi', num(s.matches || 0), s.matches || 0) + stat('Bersih', ((s.net || 0) > 0 ? '+' : '') + num(s.net || 0), s.net || 0);
+    stat('Sesi', num(s.matches || 0), s.matches || 0) + stat('Skor akhir', ((s.net || 0) > 0 ? '+' : '') + num(s.net || 0), s.net || 0);
   async function renderAccount() {
     const logged = !!me.user;
     $('#authBox').classList.toggle('hidden', logged);
@@ -467,7 +478,7 @@
       if (me.stats) { $('#meStats').innerHTML = statsHTML(me.stats); requestAnimationFrame(() => fitText($('#meStats'))); }
     };
     paint();
-    try { const d = await api('/me'); me.user = d.user; me.stats = d.stats; paint(); }
+    try { const d = await api('/me'); me.user = d.user; me.stats = d.stats; me.admin = !!d.admin; paint(); loadBlocks(); }
     catch (e) { if (e.status === 401) logoutLocal(); }
   }
 
@@ -497,7 +508,7 @@
     finally { $('#authBtn').disabled = false; }
   };
   function logoutLocal() {
-    authToken = null; store.set('auth', null); me.user = null; me.stats = null;
+    authToken = null; store.set('auth', null); me.user = null; me.stats = null; me.admin = false; blockedIds = new Set();
     renderAccount();
   }
   $('#logoutBtn').onclick = async () => {
@@ -518,6 +529,20 @@
     try {
       await api('/password', { method: 'POST', body: { newPassword: p1 } });
       toast('🔑 Password diganti. Perangkat lain otomatis keluar.');
+    } catch (e) { toast(e.message, true); }
+  };
+  // Delete the account for good: type the username to confirm.
+  $('#delAcctBtn').onclick = async () => {
+    if (!me.user) return;
+    const ok = await ask({ title: '🗑️ Hapus Akun?', text: ['Akun @' + me.user.username + ' beserta teman, chat, foto, aturan tersimpan, dan statistiknya dihapus permanen.',
+      'Di riwayat pemain lain, namamu diganti "Akun dihapus". Ini tidak bisa dibatalkan.'], ok: 'Lanjut', cancel: 'Batal' });
+    if (!ok) return;
+    const typed = await ask({ title: 'Konfirmasi', text: 'Ketik username kamu: ' + me.user.username, input: '', numeric: false, ok: 'Hapus Permanen' });
+    if (typed == null) return;
+    try {
+      await api('/me', { method: 'DELETE', body: { confirm: typed } });
+      logoutLocal();
+      toast('Akun kamu sudah dihapus.');
     } catch (e) { toast(e.message, true); }
   };
   const needLogin = () => { if (me.user) return false; toast('Masuk atau daftar dulu ya', true); return true; };
@@ -1112,7 +1137,7 @@
 
   // ---------- end of session: vote, settlement, history ----------
   async function proposeEnd() {
-    const ok = await ask({ title: '🏁 Akhiri Permainan?', text: 'Hitung pembayaran akhir dengan pengali x' + num(V.mult) + '. Semua pemain yang online harus setuju.', ok: 'Akhiri', cancel: 'Batal' });
+    const ok = await ask({ title: '🏁 Akhiri Permainan?', text: 'Hitung skor akhir dengan pengali x' + num(V.mult) + '. Semua pemain yang online harus setuju.', ok: 'Akhiri', cancel: 'Batal' });
     if (ok) socket.emit('proposeEnd');
   }
   function renderVote() {
@@ -1121,7 +1146,7 @@
     if (!v || V.state === 'final') { el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
     el.innerHTML = '<div class="dialog vote-box"><div class="dlg-title">🏁 Akhiri Permainan?</div>' +
-      '<p><b>' + esc(v.by) + '</b> mengusulkan mengakhiri keseluruhan permainan dan menghitung pembayaran (pengali x' + num(V.mult) + ').</p>' +
+      '<p><b>' + esc(v.by) + '</b> mengusulkan mengakhiri keseluruhan permainan dan menghitung skor akhir (pengali x' + num(V.mult) + ').</p>' +
       '<p class="muted">Setuju: ' + esc(v.agreed.join(', ') || '-') + '<br>Menunggu: ' + esc(v.waiting.join(', ') || '-') +
       (v.away && v.away.length ? '<br>Tidak ikut memilih (offline / tidak lanjut): ' + esc(v.away.join(', ')) : '') + '</p>' +
       (v.myVote == null ? '<div class="row"><button class="btn green" id="voteYes">Setuju</button><button class="btn red" id="voteNo">Tolak</button></div>'
@@ -1159,28 +1184,28 @@
     el.classList.remove('hidden');
 
     // 1) ranking
-    const ranking = '<h4>Peringkat (' + f.games + ' game) · semakin rendah poin semakin bagus</h4><div class="tbl-wrap"><table class="hist"><tr><th>#</th><th>Pemain</th><th>Total poin</th><th>Menang</th><th>Bersih</th></tr>' +
+    const ranking = '<h4>Peringkat (' + f.games + ' game) · semakin rendah poin semakin bagus</h4><div class="tbl-wrap"><table class="hist"><tr><th>#</th><th>Pemain</th><th>Total poin</th><th>Menang</th><th>Skor akhir</th></tr>' +
       P.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + avatarHTML(p.avatar) + ' ' + esc(p.name) + (p.gone ? ' <span class="muted">(keluar)</span>' : '') + '</td><td class="' + (p.score <= 0 ? 'good' : 'bad') + '">' + pts(p.score) + '</td><td>' + p.wins + '</td><td class="' + (p.net >= 0 ? 'good' : 'bad') + '"><b>' + money(p.net) + '</b></td></tr>').join('') + '</table></div>';
 
     // 2) every pair: points difference x multiplier
     const pairs = '<h4>Selisih Poin per Pasangan</h4><div class="pays">' + f.pays.map((x) =>
       '<div class="pay"><div class="pay-calc">#' + x.fromRank + ' <b>' + esc(x.from) + '</b> (' + pts(score(x.from)) + ') − #' + x.toRank + ' <b>' + esc(x.to) + '</b> (' + pts(score(x.to)) + ')' +
-      ' = <b>' + x.diff + ' poin</b> × ' + num(f.mult) + ' = <b class="amt">' + num(x.amount) + '</b></div>' +
-      '<div class="pay-who">' + (x.amount > 0 ? '💸 ' + esc(x.from) + ' bayar ke ' + esc(x.to) + ' <b>' + num(x.amount) + '</b>' : 'Poin sama, tidak ada pembayaran') + '</div></div>').join('') + '</div>';
+      ' = <b>' + x.diff + ' poin</b> × ' + num(f.mult) + ' = <b class="amt">' + num(x.amount) + ' poin</b></div>' +
+      '<div class="pay-who">' + (x.amount > 0 ? '📉 ' + esc(x.from) + ' kalah <b>' + num(x.amount) + ' poin</b> dari ' + esc(x.to) : 'Poin sama, tidak ada selisih') + '</div></div>').join('') + '</div>';
 
-    // 3) per player: pays to / receives from each other player
+    // 3) per player: points lost to / won from each other player
     const perPlayer = '<h4>Rincian per Pemain</h4><div class="per-player">' + P.map((p) => {
       const out = f.pays.filter((x) => x.from === p.name && x.amount > 0);
       const inc = f.pays.filter((x) => x.to === p.name && x.amount > 0);
       return '<div class="pp"><div class="pp-name">' + avatarHTML(p.avatar) + ' ' + esc(p.name) + ' <span class="muted">(' + pts(p.score) + ' poin)</span></div>' +
-        (out.length ? out.map((x) => '<div class="pp-line bad">Bayar ke ' + esc(x.to) + ': ' + x.diff + ' × ' + num(f.mult) + ' = −' + num(x.amount) + '</div>').join('') : '') +
-        (inc.length ? inc.map((x) => '<div class="pp-line good">Terima dari ' + esc(x.from) + ': ' + x.diff + ' × ' + num(f.mult) + ' = +' + num(x.amount) + '</div>').join('') : '') +
-        (!out.length && !inc.length ? '<div class="pp-line muted">Tidak ada pembayaran</div>' : '') +
-        '<div class="pp-net ' + (p.net >= 0 ? 'good' : 'bad') + '">Bersih: ' + money(p.net) + '</div></div>';
+        (out.length ? out.map((x) => '<div class="pp-line bad">Kalah dari ' + esc(x.to) + ': ' + x.diff + ' × ' + num(f.mult) + ' = −' + num(x.amount) + ' poin</div>').join('') : '') +
+        (inc.length ? inc.map((x) => '<div class="pp-line good">Menang dari ' + esc(x.from) + ': ' + x.diff + ' × ' + num(f.mult) + ' = +' + num(x.amount) + ' poin</div>').join('') : '') +
+        (!out.length && !inc.length ? '<div class="pp-line muted">Tidak ada selisih</div>' : '') +
+        '<div class="pp-net ' + (p.net >= 0 ? 'good' : 'bad') + '">Skor akhir: ' + money(p.net) + ' poin</div></div>';
     }).join('') + '</div>';
 
-    // 4) matrix: row pays column
-    const matrix = '<h4>Tabel Pembayaran (baris bayar ke kolom)</h4><div class="tbl-wrap"><table class="hist"><tr><th>Bayar \\ Terima</th>' + P.map((p) => '<th>' + esc(p.name) + '</th>').join('') + '</tr>' +
+    // 4) matrix: row loses points to column
+    const matrix = '<h4>Tabel Selisih Poin (baris kalah dari kolom)</h4><div class="tbl-wrap"><table class="hist"><tr><th>Kalah \\ Menang</th>' + P.map((p) => '<th>' + esc(p.name) + '</th>').join('') + '</tr>' +
       P.map((r) => '<tr><th>' + esc(r.name) + '</th>' + P.map((c) => {
         if (r.name === c.name) return '<td class="muted">—</td>';
         const x = f.pays.find((y) => y.from === r.name && y.to === c.name);
@@ -1225,7 +1250,7 @@
     return '<div class="pays">' + s.pays.map((x) =>
       '<div class="pay"><div class="pay-calc">#' + x.fromRank + ' <b>' + esc(x.from) + '</b> (' + pts(x.fromScore) + ') − #' + x.toRank + ' <b>' + esc(x.to) + '</b> (' + pts(x.toScore) + ')' +
       ' = <b>' + x.diff + ' poin</b> × ' + num(mult) + ' = <b class="amt">' + num(x.amount) + '</b></div>' +
-      '<div class="pay-who">' + (x.amount > 0 ? '💸 ' + esc(x.from) + ' bayar ke ' + esc(x.to) + ' <b>' + num(x.amount) + '</b>' : 'Poin sama, tidak ada pembayaran') + '</div></div>').join('') + '</div>' +
+      '<div class="pay-who">' + (x.amount > 0 ? '📉 ' + esc(x.from) + ' kalah <b>' + num(x.amount) + ' poin</b> dari ' + esc(x.to) : 'Poin sama, tidak ada selisih') + '</div></div>').join('') + '</div>' +
       '<div class="nets">' + s.players.map((p) => '<span class="net ' + (p.net >= 0 ? 'good' : 'bad') + '">' + esc(p.name) + ': ' + (p.net > 0 ? '+' : '') + num(p.net) + '</span>').join('') + '</div>';
   }
   function matchDetailHTML(d) {
@@ -1233,7 +1258,7 @@
     const total = computePays(d.players.map((p) => ({ name: p.name, score: p.total_points })), mult);
     const games = d.games.map((g) => ({ no: g.game_no, winner: g.winner_name, finalCards: g.final_cards, rows: g.rows.map((r) => ({ name: r.name, points: r.points, detail: r.detail })) }));
     return '<h5>Poin per Game</h5>' + historyTable(games) +
-      '<h5>Pembayaran Akhir (total ' + d.games.length + ' game · x' + num(mult) + ')</h5>' + paysHTML(total, mult) +
+      '<h5>Skor Akhir (total ' + d.games.length + ' game · x' + num(mult) + ')</h5>' + paysHTML(total, mult) +
       d.games.map((g) => {
         const rows = [...g.rows].sort((a, b) => a.points - b.points);
         const gs = computePays(rows.map((r) => ({ name: r.name, score: r.points })), mult);
@@ -1242,9 +1267,9 @@
           '<div class="tbl-wrap"><table class="hist"><tr><th>Pemain</th><th>Rincian</th><th>Poin</th><th>Nilai</th></tr>' +
           rows.map((r) => '<tr><td>' + esc(r.name) + (r.is_winner ? ' 🏆' : '') + '</td><td class="det">' + esc(r.detail || '') + '</td>' +
             '<td class="' + (r.points <= 0 ? 'good' : 'bad') + '">' + pts(r.points) + '</td><td>' + num(r.points * mult) + '</td></tr>').join('') + '</table></div>' +
-          '<div class="gpays-title">Siapa bayar ke siapa di game ini</div>' + paysHTML(gs, mult) + '</div>';
+          '<div class="gpays-title">Selisih poin antar pemain di game ini</div>' + paysHTML(gs, mult) + '</div>';
       }).join('') +
-      '<p class="muted">Pembayaran semua game dijumlahkan = pembayaran akhir.</p>';
+      '<p class="muted">Selisih semua game dijumlahkan = skor akhir. Poin hanya untuk hiburan, tidak bernilai uang.</p>';
   }
   async function toggleMatch(btn) {
     const det = btn.nextElementSibling;
@@ -1432,7 +1457,7 @@
         'Jika kamu sudah membuang kartu tertinggi dan ia tetap menang, tidak ada denda.</p>' : '') +
       '<p>Koneksi terputus: saat kembali kamu ditanya apakah ingin melanjutkan. Permainan tersimpan walaupun server sempat mati.</p>' +
       '<h4>Mengakhiri Permainan</h4><p>Setelah tiap game semua pemain mengonfirmasi hasil. Host bisa mengusulkan mengakhiri permainan, dan semua pemain online harus setuju. ' +
-      'Pemain diurutkan dari total poin tertinggi (#1) ke terendah. Setiap pasangan dibayar: (poin pemain atas − poin pemain bawah) × pengali.</p>' +
+      'Pemain diurutkan dari total poin tertinggi (#1) ke terendah. Setiap pasangan dihitung selisihnya: (poin pemain atas − poin pemain bawah) × pengali = skor akhir. Poin hanya untuk hiburan dan tidak bernilai uang.</p>' +
       '<p class="muted">Aturan meja hanya bisa diatur oleh pembuat meja, sebelum permainan dimulai.</p></div></div>';
   }
   function openRules() {
@@ -1605,9 +1630,16 @@
 
   // ---------- friends, presence and invites ----------
   let F = { friends: [], incoming: [], outgoing: [] };
+  async function loadBlocks() {
+    if (!me.user) return;
+    try { blockedList = (await api('/blocks')).blocked; blockedIds = new Set(blockedList.map((b) => b.id)); } catch {}
+    if (modBtnEl) modBtnEl.classList.toggle('hidden', !me.admin);
+  }
+  const modBtnEl = document.getElementById('modBtn');
   async function refreshFriends() {
     if (!me.user) return;
     try { F = await api('/friends'); } catch { return; }
+    await loadBlocks();
     renderFriendBadges();
     if (!$('#friends').classList.contains('hidden')) renderFriends();
     if (dmWith) renderDmHeader();
@@ -1673,7 +1705,9 @@
           '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="remove" aria-label="Hapus teman">✕</button>');
       }).join('') : '<p class="muted">Belum ada teman. Tambahkan dengan username di atas.</p>') +
       (inRoom ? '' : '<p class="muted">Tips: buat atau masuk meja dulu, lalu undang teman yang online.</p>') +
-      (F.outgoing.length ? '<h4>Menunggu Konfirmasi</h4>' + F.outgoing.map((f) => friendRow(f, '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="cancel">Batalkan</button>')).join('') : '');
+      (F.outgoing.length ? '<h4>Menunggu Konfirmasi</h4>' + F.outgoing.map((f) => friendRow(f, '<button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="cancel">Batalkan</button>')).join('') : '') +
+      (blockedList.length ? '<h4>Diblokir (' + blockedList.length + ')</h4>' + blockedList.map((f) => friendRow({ ...f, presence: { online: false } },
+        '<button class="btn ghost small dark" data-unblock="' + f.id + '">Buka blokir</button>')).join('') : '');
     const el = $('#friends');
     const keep = el.querySelector('#addFriendInput') ? el.querySelector('#addFriendInput').value : '';
     el.innerHTML = panel('👥 Teman & Pemain Online', body);
@@ -1712,6 +1746,9 @@
         const f = [...F.friends, ...F.incoming, ...F.outgoing].find((x) => x.id === +b.dataset.remove);
         if (b.dataset.kind === 'remove' && !(await ask({ title: 'Hapus teman?', text: 'Hapus ' + (f ? f.name : '') + ' dari daftar teman?', ok: 'Hapus' }))) return;
         await api('/friends/' + b.dataset.remove, { method: 'DELETE' });
+      } else if (b.dataset.unblock) {
+        await api('/blocks/' + b.dataset.unblock, { method: 'DELETE' });
+        toast('Blokir dibuka');
       } else if (b.dataset.chat) {
         openDm(+b.dataset.chat);
       } else if (b.dataset.invite) {
@@ -1829,7 +1866,11 @@
         incoming: '<button class="btn green" data-pact="accept">✓ Terima Pertemanan</button><button class="btn ghost small dark" data-pact="cancel">Tolak</button>',
         friends: '<span class="prof-tag good">✓ Teman</span><button class="btn blue" data-pact="chat">💬 Chat</button>',
       }[d.relation];
-      $('#profBody').innerHTML = '<div class="me-stats wide prof-stats">' + statsHTML(s) + '</div><div class="prof-acts">' + acts + '</div>';
+      const safety = d.relation === 'self' ? '' : '<div class="prof-safety">' +
+        (d.blocked ? '<button class="link-btn" data-pact="unblock">✅ Buka blokir</button>' : '<button class="link-btn" data-pact="block">⛔ Blokir</button>') +
+        '<button class="link-btn" data-pact="report">🚩 Laporkan</button></div>';
+      $('#profBody').innerHTML = '<div class="me-stats wide prof-stats">' + statsHTML(s) + '</div><div class="prof-acts">' +
+        (d.blocked ? '<span class="prof-tag">⛔ Diblokir</span>' : acts) + '</div>' + safety;
       requestAnimationFrame(() => fitText($('#profBody')));
       $('#profBody').onclick = async (e) => {
         const b = e.target.closest('[data-pact]'); if (!b) return;
@@ -1838,6 +1879,12 @@
           else if (b.dataset.pact === 'accept') { await api('/friends/' + d.user.id + '/accept', { method: 'POST' }); toast('Kamu sekarang berteman dengan ' + d.user.name); }
           else if (b.dataset.pact === 'cancel') await api('/friends/' + d.user.id, { method: 'DELETE' });
           else if (b.dataset.pact === 'chat') { el.classList.add('hidden'); await refreshFriends(); openDm(d.user.id); return; }
+          else if (b.dataset.pact === 'block') {
+            if (!(await ask({ title: '⛔ Blokir ' + d.user.name + '?', text: ['Dia tidak bisa mengirim permintaan teman, chat, atau undangan ke kamu, dan pesan/reaksinya di meja disembunyikan untukmu.', 'Pertemanan kalian juga dihapus.'], ok: 'Blokir' }))) return;
+            await api('/blocks/' + d.user.id, { method: 'POST' });
+            toast('⛔ ' + d.user.name + ' diblokir');
+          } else if (b.dataset.pact === 'unblock') { await api('/blocks/' + d.user.id, { method: 'DELETE' }); toast('Blokir dibuka'); }
+          else if (b.dataset.pact === 'report') { el.classList.add('hidden'); return reportPlayer(d.user); }
           refreshFriends();
           openProfile(seat);
         } catch (err) { toast(err.message, true); }
@@ -1845,6 +1892,70 @@
     } catch (err) { $('#profBody').innerHTML = '<p class="muted">' + esc(err.message) + '</p>'; }
   }
   $('#profile').addEventListener('click', (e) => { if (e.target.id === 'profile' || e.target.closest('.prof-x')) $('#profile').classList.add('hidden'); });
+
+  // ---------- report a player (reviewed by the moderators) ----------
+  async function reportPlayer(u) {
+    let reasons = [];
+    try { reasons = (await api('/report-reasons')).reasons; } catch (e) { return toast(e.message, true); }
+    const el = $('#ask');
+    const reason = await new Promise((resolve) => {
+      el.innerHTML = '<div class="dialog ask-box"><div class="dlg-title">🚩 Laporkan ' + esc(u.name) + '</div><p>Pilih alasannya. Laporan ditinjau moderator; pelapor tidak diberitahukan ke pemain itu.</p>' +
+        '<div class="cp-list">' + reasons.map((r, i) => '<button class="cp-item" data-r="' + i + '"><span>' + esc(r) + '</span></button>').join('') + '</div>' +
+        '<div class="row"><button class="btn ghost dark" id="askNo">Batal</button></div></div>';
+      el.classList.remove('hidden');
+      const done = (v) => { el.classList.add('hidden'); el.innerHTML = ''; resolve(v); };
+      $('#askNo').onclick = () => done(null);
+      el.querySelectorAll('[data-r]').forEach((b) => (b.onclick = () => done(reasons[+b.dataset.r])));
+    });
+    if (!reason) return;
+    const details = await ask({ title: 'Ceritakan singkat (opsional)', text: 'Misalnya apa yang dia tulis atau lakukan', input: '', numeric: false, ok: 'Kirim Laporan', cancel: 'Lewati' });
+    try {
+      await api('/reports', { method: 'POST', body: { userId: u.id, reason, details: details || '' } });
+      toast('🚩 Laporan terkirim. Terima kasih!');
+      if (!blockedIds.has(u.id) && (await ask({ title: 'Blokir juga?', text: 'Blokir ' + u.name + ' supaya tidak bisa menghubungi kamu?', ok: 'Blokir', cancel: 'Tidak' }))) {
+        await api('/blocks/' + u.id, { method: 'POST' });
+        await loadBlocks();
+        toast('⛔ ' + u.name + ' diblokir');
+      }
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // ---------- moderators: reports and bans (usernames in ADMIN_USERNAMES on the server) ----------
+  let modStatus = 'open';
+  async function openMod() {
+    const el = $('#mod');
+    el.classList.remove('hidden');
+    el.innerHTML = panel('🛡️ Laporan Pemain', '<p class="muted">Memuat…</p>');
+    let list = [];
+    try { list = (await api('/admin/reports?status=' + modStatus)).reports; } catch (e) { el.innerHTML = panel('🛡️ Laporan Pemain', '<p class="muted">' + esc(e.message) + '</p>'); return; }
+    const tabs = '<div class="ftabs">' + [['open', 'Terbuka'], ['done', 'Selesai'], ['all', 'Semua']].map(([k, t]) => '<button data-mtab="' + k + '" class="' + (modStatus === k ? 'on' : '') + '">' + t + '</button>').join('') + '</div>';
+    el.innerHTML = panel('🛡️ Laporan Pemain', tabs + (list.length ? list.map((r) =>
+      '<div class="mcard"><div class="mhead"><b>#' + r.id + '</b> · ' + new Date(r.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) +
+      ' · <span class="' + (r.status === 'open' ? 'bad' : 'good') + '">' + (r.status === 'open' ? 'Terbuka' : 'Selesai') + '</span></div>' +
+      '<div><b>' + esc(r.target_name) + '</b>' + (r.target_banned ? ' <span class="bad">(diblokir moderator)</span>' : '') + ' · ' + r.target_reports + ' laporan total</div>' +
+      '<div>Alasan: <b>' + esc(r.reason) + '</b> · dari ' + esc(r.reporter_name ? r.reporter_name + ' (@' + r.reporter_username + ')' : 'akun dihapus') + '</div>' +
+      (r.details ? '<div class="muted">"' + esc(r.details) + '"</div>' : '') +
+      (r.context ? '<pre class="mod-ctx">' + esc(r.context) + '</pre>' : '') +
+      '<div class="row">' + (r.status === 'open' ? '<button class="btn green small" data-mdone="' + r.id + '">✓ Selesai</button>' : '<button class="btn ghost small dark" data-mopen="' + r.id + '">Buka lagi</button>') +
+      (r.target_id ? (r.target_banned ? '<button class="btn ghost small dark" data-unban="' + r.target_id + '">Batalkan blokir akun</button>' : '<button class="btn red small" data-ban="' + r.target_id + '">⛔ Blokir akun</button>') : '') +
+      '</div></div>').join('') : '<p class="muted">Tidak ada laporan.</p>'));
+  }
+  if (modBtnEl) modBtnEl.onclick = openMod;
+  $('#mod').addEventListener('click', async (e) => {
+    if (e.target.id === 'mod' || e.target.classList.contains('x')) return $('#mod').classList.add('hidden');
+    const b = e.target.closest('button'); if (!b) return;
+    try {
+      if (b.dataset.mtab) modStatus = b.dataset.mtab;
+      else if (b.dataset.mdone) await api('/admin/reports/' + b.dataset.mdone, { method: 'POST', body: { status: 'done' } });
+      else if (b.dataset.mopen) await api('/admin/reports/' + b.dataset.mopen, { method: 'POST', body: { status: 'open' } });
+      else if (b.dataset.ban) {
+        if (!(await ask({ title: '⛔ Blokir akun ini?', text: 'Pemain langsung keluar dari semua perangkat dan tidak bisa masuk lagi.', ok: 'Blokir akun' }))) return;
+        await api('/admin/users/' + b.dataset.ban + '/ban', { method: 'POST', body: { banned: true } });
+      } else if (b.dataset.unban) await api('/admin/users/' + b.dataset.unban + '/ban', { method: 'POST', body: { banned: false } });
+      else return;
+      openMod();
+    } catch (err) { toast(err.message, true); }
+  });
 
   // ---------- table rules: choice for new tables, editor, presets ----------
   // The rules used for the next table you create: Aturan Default or one of your saved presets (remembered on this device).

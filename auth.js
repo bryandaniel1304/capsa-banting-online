@@ -64,6 +64,10 @@ function throttled(ip) {
   return a.n > 30;
 }
 
+// moderators: comma separated usernames in ADMIN_USERNAMES (they see reports and can ban accounts)
+const isAdmin = (u) => !!u && String(process.env.ADMIN_USERNAMES || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean).includes(u.username.toLowerCase());
+const REPORT_REASONS = ['Kata-kata kasar / menghina', 'Pelecehan / ancaman', 'Nama atau foto tidak pantas', 'Curang / sengaja merusak permainan', 'Spam / penipuan', 'Lainnya'];
+
 const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
 const cleanName = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 14);
 
@@ -72,6 +76,8 @@ function router(hooks = {}) {
   const presenceOf = hooks.presenceOf || (() => ({ online: false }));
   const emitToUser = hooks.emitToUser || (() => {});
   const onProfile = hooks.onProfile || (() => {}); // name / avatar changed: refresh live tables
+  const onAccountGone = hooks.onAccountGone || (() => {}); // deleted / banned: sign out its devices
+  const reportContext = hooks.reportContext || (() => null);
   const r = express.Router();
   const small = express.json({ limit: '10kb' });
   r.use((req, res, next) => (req.path === '/me/photo' ? next() : small(req, res, next))); // photos get their own limit
@@ -109,6 +115,7 @@ function router(hooks = {}) {
       if (!u || typeof password !== 'string' || !verifyPassword(password, u.pass_hash)) {
         return res.status(401).json({ error: 'Username atau password salah' });
       }
+      if (u.banned_at) return res.status(403).json({ error: 'Akun ini diblokir karena melanggar aturan main' });
       const token = await store.createSession(u.id);
       res.json({ token, user: { id: u.id, username: u.username, name: u.name, avatar: u.avatar } });
     } catch (e) { next(e); }
@@ -119,7 +126,19 @@ function router(hooks = {}) {
   });
 
   r.get('/me', auth, async (req, res, next) => {
-    try { res.json({ user: req.user, stats: await store.stats(req.user.id) }); } catch (e) { next(e); }
+    try { res.json({ user: req.user, stats: await store.stats(req.user.id), admin: isAdmin(req.user) }); } catch (e) { next(e); }
+  });
+
+  // Delete my account for good (Play Store rule: accounts can be deleted from the app and from the web).
+  // The signed-in session plus typing the username confirms it.
+  r.delete('/me', auth, async (req, res, next) => {
+    try {
+      const confirm = String((req.body || {}).confirm || '').trim().replace(/^@/, '').toLowerCase();
+      if (confirm !== req.user.username.toLowerCase()) return res.status(400).json({ error: 'Ketik username kamu untuk konfirmasi' });
+      const label = await store.deleteAccount(req.user.id);
+      onAccountGone(req.user.id, { deleted: true, label });
+      res.json({ ok: true });
+    } catch (e) { next(e); }
   });
 
   r.patch('/me', auth, async (req, res, next) => {
@@ -209,6 +228,7 @@ function router(hooks = {}) {
       const other = await store.findUserByUsername(String((req.body || {}).username || '').trim().replace(/^@/, ''));
       if (!other) return res.status(404).json({ error: 'Username tidak ditemukan' });
       if (other.id === req.user.id) return res.status(400).json({ error: 'Itu username kamu sendiri' });
+      if (other.banned_at || (await store.blockedEither(req.user.id, other.id))) return res.status(403).json({ error: 'Tidak bisa menambahkan pemain ini' });
       const status = await store.requestFriend(req.user.id, other.id);
       changed(req.user.id, other.id);
       const msg = { pending: 'Permintaan pertemanan dikirim ke @' + other.username, accepted: 'Kamu sekarang berteman dengan ' + other.name, already: 'Sudah berteman dengan ' + other.name };
@@ -250,7 +270,7 @@ function router(hooks = {}) {
       const other = idParam(req);
       const body = String((req.body || {}).body || '').trim().slice(0, 500);
       if (!body) return res.status(400).json({ error: 'Pesan kosong' });
-      if (!(await store.areFriends(req.user.id, other))) return res.status(403).json({ error: 'Hanya bisa chat dengan teman' });
+      if (!(await store.areFriends(req.user.id, other)) || (await store.blockedEither(req.user.id, other))) return res.status(403).json({ error: 'Hanya bisa chat dengan teman' });
       const m = await store.addMessage(req.user.id, other, body);
       const payload = { ...m, from: { id: req.user.id, name: req.user.name, avatar: req.user.avatar } };
       emitToUser(other, 'dm', payload);
@@ -269,8 +289,61 @@ function router(hooks = {}) {
       const id = idParam(req);
       const u = await store.publicUser(id);
       if (!u) return res.status(404).json({ error: 'Pemain tidak ditemukan' });
-      const [stats, rel] = await Promise.all([store.stats(id), store.relation(req.user.id, id)]);
-      res.json({ user: u, stats, relation: rel, presence: rel === 'friends' || rel === 'self' ? presenceOf(id) : null });
+      const [stats, rel, blocked] = await Promise.all([store.stats(id), store.relation(req.user.id, id), store.blockedIds(req.user.id)]);
+      const iBlocked = (await store.listBlocked(req.user.id)).some((b) => b.id === id);
+      res.json({ user: u, stats, relation: rel, blocked: iBlocked, blockedEither: blocked.includes(id),
+        presence: rel === 'friends' || rel === 'self' ? presenceOf(id) : null });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- safety: block / report / moderate ----------
+  r.get('/blocks', auth, async (req, res, next) => {
+    try { res.json({ blocked: await store.listBlocked(req.user.id) }); } catch (e) { next(e); }
+  });
+  r.post('/blocks/:id', auth, async (req, res, next) => {
+    try {
+      const id = idParam(req);
+      if (!id || id === req.user.id || !(await store.publicUser(id))) return res.status(400).json({ error: 'Pemain tidak valid' });
+      await store.block(req.user.id, id);
+      changed(req.user.id, id);
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+  r.delete('/blocks/:id', auth, async (req, res, next) => {
+    try { await store.unblock(req.user.id, idParam(req)); changed(req.user.id); res.json({ ok: true }); } catch (e) { next(e); }
+  });
+  r.get('/report-reasons', (req, res) => res.json({ reasons: REPORT_REASONS }));
+  r.post('/reports', auth, async (req, res, next) => {
+    try {
+      const { userId, reason, details } = req.body || {};
+      const target = await store.publicUser(parseInt(userId, 10) || 0);
+      if (!target || target.id === req.user.id) return res.status(400).json({ error: 'Pemain tidak valid' });
+      if (!REPORT_REASONS.includes(reason)) return res.status(400).json({ error: 'Pilih alasan laporan' });
+      if ((await store.recentReportsBy(req.user.id)) >= 10) return res.status(429).json({ error: 'Terlalu banyak laporan, coba lagi nanti' });
+      await store.addReport({
+        reporterId: req.user.id, targetId: target.id, targetName: target.name + ' (@' + target.username + ')', reason,
+        details: String(details || '').replace(/[<>]/g, '').trim().slice(0, 500), context: reportContext(target.id, req.user.id),
+      });
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+  const admin = (req, res, next) => (isAdmin(req.user) ? next() : res.status(403).json({ error: 'Khusus moderator' }));
+  r.get('/admin/reports', auth, admin, async (req, res, next) => {
+    try {
+      const status = ['open', 'done', 'all'].includes(req.query.status) ? req.query.status : 'open';
+      res.json({ reports: await store.listReports(status) });
+    } catch (e) { next(e); }
+  });
+  r.post('/admin/reports/:id', auth, admin, async (req, res, next) => {
+    try { await store.resolveReport(idParam(req), (req.body || {}).status === 'open' ? 'open' : 'done'); res.json({ ok: true }); } catch (e) { next(e); }
+  });
+  r.post('/admin/users/:id/ban', auth, admin, async (req, res, next) => {
+    try {
+      const id = idParam(req), banned = !!(req.body || {}).banned;
+      if (!id || id === req.user.id) return res.status(400).json({ error: 'Akun tidak valid' });
+      await store.setBanned(id, banned);
+      if (banned) onAccountGone(id, { deleted: false });
+      res.json({ ok: true });
     } catch (e) { next(e); }
   });
 
