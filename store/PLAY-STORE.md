@@ -100,3 +100,16 @@ Buat ulang gambar: `cd app && node store-assets.js`.
   rilis baru, karena aplikasi memuat server online.
 - APK yang dibagikan langsung (sideload) dan versi Play ditandatangani dengan kunci berbeda. Pemain yang pindah dari APK ke
   versi Play perlu menghapus aplikasi lama dulu.
+
+## 5. Notifikasi undangan di aplikasi Android (Firebase, sekali saja)
+
+Di browser (Chrome / Edge / Firefox, iPhone yang dipasang ke Layar Utama) notifikasi sudah langsung jalan.
+Untuk aplikasi Android dibutuhkan Firebase Cloud Messaging (gratis):
+
+1. Buka https://console.firebase.google.com → **Create a project** → nama `capsa-banting` → Analytics boleh dimatikan.
+2. Di project itu: **Add app → Android** → package name `id.capsabanting.online` → nama `Capsa Banting` → **Register app**.
+3. **Download google-services.json** → simpan di `app/android/app/google-services.json` (lalu build ulang .aab / .apk).
+4. ⚙️ **Project settings → Service accounts → Generate new private key** → file JSON terunduh.
+   File ini rahasia: jangan dibagikan atau dimasukkan ke git.
+5. Render → Environment → tambah `FIREBASE_SERVICE_ACCOUNT` = isi file JSON itu (tempel semuanya) → **Save, rebuild, and deploy**.
+6. Data safety Play Store: tambahkan **Device or other IDs** (token notifikasi) · Wajib bila notifikasi aktif · Fungsi aplikasi.

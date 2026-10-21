@@ -16,7 +16,7 @@ let srv = null;
 async function startServer() {
   srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT, PGLITE_DIR: DATA, DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
   srv.stdout.on('data', (d) => { const t = String(d); if (/restored table/.test(t)) process.stdout.write('  server: ' + t); });
-  for (let i = 0; i < 100; i++) { try { await fetch(url + '/healthz'); return; } catch { await sleep(150); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); return; } catch { await sleep(150); } }
   throw new Error('server did not start');
 }
 async function api(p, body) {

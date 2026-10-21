@@ -44,7 +44,7 @@ async function until(fn, ms = 240000) {
 }
 
 (async () => {
-  for (let i = 0; i < 100; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
   const X = await signup('xena', 'Xena'), Y = await signup('yuda', 'Yuda'), Z = await signup('zaki', 'Zaki');
   const x = client(X.token), y = client(Y.token);
   let z = client(Z.token);

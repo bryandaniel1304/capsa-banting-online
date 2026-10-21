@@ -1,3 +1,4 @@
+const path = require('path');
 // Renders the app icon (casino style: two cards on green felt with a gold ring) into assets/ for @capacitor/assets.
 const sharp = require('sharp');
 const fs = require('fs');
@@ -30,5 +31,17 @@ const safe = (body) => `<g transform="translate(512 512) scale(.62) translate(-5
     <g transform="translate(${sp / 2 - 400} ${sp / 2 - 400}) scale(${800 / S})"><rect width="${S}" height="${S}" rx="200" fill="url(#felt)"/>${ring}${cards}</g></svg>`;
   await sharp(Buffer.from(splash)).png().toFile('assets/splash.png');
   await sharp(Buffer.from(splash)).png().toFile('assets/splash-dark.png');
+  // web: PNG app icons + monochrome notification badge; Android: white status-bar icon for notifications
+  const pub = path.join(__dirname, '..', 'public');
+  await sharp('assets/icon-only.png').resize(192, 192).png().toFile(path.join(pub, 'icon-192.png'));
+  await sharp('assets/icon-only.png').resize(512, 512).png().toFile(path.join(pub, 'icon-512.png'));
+  const glyph = (n) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 100 100">
+    <text x="50" y="84" text-anchor="middle" font-family="'Segoe UI Symbol', 'DejaVu Sans', sans-serif" font-size="96" fill="#fff">♠</text></svg>`);
+  await sharp(glyph(96)).png().toFile(path.join(pub, 'badge-96.png'));
+  for (const [d, n] of [['mdpi', 24], ['hdpi', 36], ['xhdpi', 48], ['xxhdpi', 72], ['xxxhdpi', 96]]) {
+    const dir = path.join(__dirname, 'android', 'app', 'src', 'main', 'res', 'drawable-' + d);
+    fs.mkdirSync(dir, { recursive: true });
+    await sharp(glyph(n)).png().toFile(path.join(dir, 'ic_stat_notify.png'));
+  }
   console.log('icons written');
 })();

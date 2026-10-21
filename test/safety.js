@@ -21,7 +21,7 @@ async function api(p, { method = 'GET', body, token } = {}) {
 const signup = async (u) => (await api('/signup', { method: 'POST', body: { username: u, password: 'rahasia1', name: u } }));
 
 (async () => {
-  for (let i = 0; i < 60; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
   const A = await signup('ana'), B = await signup('budi'), M = await signup('moda');
   const idA = A.user.id, idB = B.user.id;
 

@@ -33,7 +33,7 @@ function client(rc) {
 }
 
 (async () => {
-  for (let i = 0; i < 60; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
   const A = (await api('/signup', { method: 'POST', body: { username: 'dina', password: 'rahasia1', name: 'Dina' } })).data;
   const B = (await api('/signup', { method: 'POST', body: { username: 'eko', password: 'rahasia2', name: 'Eko' } })).data;
 

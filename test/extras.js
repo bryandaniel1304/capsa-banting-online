@@ -26,7 +26,7 @@ const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 (async () => {
-  for (let i = 0; i < 60; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
   const signup = async (u) => (await (await fetch(url + '/api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: 'rahasia1', name: u }) })).json()).token;
   const A = await signup('ana'), B = await signup('budi');
   const a = io(url, { transports: ['websocket'] }), b = io(url, { transports: ['websocket'] });

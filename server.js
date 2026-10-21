@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 const R = require('./shared/rules');
 const store = require('./store');
 const accounts = require('./auth');
+const push = require('./push');
 
 const PORT = process.env.PORT || 3000;
 const cleanRulesName = (n) => String(n || '').replace(/[<>]/g, '').trim().slice(0, 30) || null;
@@ -91,6 +92,14 @@ function reportContext(targetId, reporterId) {
   if (!room || !room.chatLog) return null;
   const lines = room.chatLog.filter((c) => c.userId === targetId).slice(-15);
   return lines.length ? 'Meja ' + room.code + ':\n' + lines.map((c) => new Date(c.at).toISOString().slice(11, 16) + ' ' + c.name + ': ' + c.text).join('\n') : null;
+}
+// true when one of the player's devices has the game on screen (the client reports page visibility)
+function userVisible(userId) {
+  for (const id of io.sockets.adapter.rooms.get('user:' + userId) || []) {
+    const s = io.sockets.sockets.get(id);
+    if (s && s.data.visible !== false) return true;
+  }
+  return false;
 }
 const roomPresence = (room) => room.seats.forEach((p) => p && p.userId && !p.bot && notifyPresence(p.userId));
 const lastInvite = new Map();
@@ -800,6 +809,7 @@ io.on('connection', (socket) => {
   });
 
   // ---------- players online right now (anyone logged in, not only friends) ----------
+  socket.on('visible', ({ visible } = {}) => { socket.data.visible = visible !== false; });
   socket.on('online:list', async (_, cb) => {
     if (!user) return ack(cb, { error: 'Silakan masuk dulu' });
     const seen = new Map();
@@ -824,10 +834,10 @@ io.on('connection', (socket) => {
       const fid = parseInt(userId != null ? userId : friendId, 10);
       if (!fid || fid === user.id) return ack(cb, { error: 'Pemain tidak valid' });
       const pr = presenceOf(fid);
-      if (!pr.online) return ack(cb, { error: 'Pemain sedang offline' });
-      if (pr.room === room.code) return ack(cb, { error: 'Pemain sudah di meja ini' });
+      if (pr.online && pr.room === room.code) return ack(cb, { error: 'Pemain sudah di meja ini' });
       if (await store.blockedEither(user.id, fid)) return ack(cb, { error: 'Tidak bisa mengundang pemain ini' });
       const friend = await store.areFriends(user.id, fid);
+      if (!pr.online && !friend) return ack(cb, { error: 'Pemain sedang offline' }); // offline: friends only, by notification
       const k = user.id + ':' + fid;
       if (Date.now() - (lastInvite.get(k) || 0) < 8000) return ack(cb, { error: 'Tunggu sebentar sebelum mengundang lagi' });
       // light anti-spam for invites to strangers
@@ -836,11 +846,24 @@ io.on('connection', (socket) => {
       if (!friend && mine.length >= 10) return ack(cb, { error: 'Terlalu banyak undangan, tunggu sebentar' });
       inviteLog.set(user.id, [...mine, now]);
       lastInvite.set(k, now);
-      emitToUser(fid, 'invite', {
-        from: { id: user.id, name: prof().name, username: user.username, avatar: prof().avatar }, friend,
-        room: room.code, mult: room.mult, players: room.seats.filter(Boolean).length, state: room.state,
-      });
-      ack(cb, { ok: true });
+      const players = room.seats.filter(Boolean).length;
+      if (pr.online) {
+        emitToUser(fid, 'invite', {
+          from: { id: user.id, name: prof().name, username: user.username, avatar: prof().avatar }, friend,
+          room: room.code, mult: room.mult, players, state: room.state,
+        });
+      }
+      // not looking at the game (offline, app in the background, other tab): also a phone / browser notification
+      let pushed = 0;
+      if (!userVisible(fid)) {
+        pushed = await push.notify(fid, {
+          title: '✉️ Undangan main dari ' + prof().name,
+          body: prof().name + ' mengundangmu ke meja ' + room.code + ' (x' + room.mult.toLocaleString('id-ID') + ', ' + players + '/4 pemain). Ketuk untuk gabung.',
+          tag: 'invite-' + room.code, ttl: 900, data: { room: room.code, url: '/?room=' + room.code },
+        });
+      }
+      if (!pr.online && !pushed) return ack(cb, { error: 'Teman sedang offline dan belum menyalakan notifikasi' });
+      ack(cb, { ok: true, pushed: !pr.online });
     } catch (e) { console.error('invite', e.message); ack(cb, { error: 'Gagal mengundang' }); }
   });
 
@@ -1187,7 +1210,8 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message ? e.message : e));
 process.on('uncaughtException', (e) => console.error('uncaughtException:', e && e.stack ? e.stack : e));
 
-store.init().then((kind) => {
+store.init().then(async (kind) => {
+  await push.init();
   if (kind === 'pglite') console.log('Database: embedded PGlite (~/.capsa-banting-online). Set DATABASE_URL to use Postgres in production.');
   else console.log('Database: Postgres');
   server.listen(PORT, () => console.log('Capsa Banting Online on http://localhost:' + PORT));

@@ -266,7 +266,7 @@
       hideSplash();
       loaded();
       me.user = (res && res.user) || null;
-      if (me.user) refreshFriends();
+      if (me.user) { refreshFriends(); pushInit(); }
       if (!me.user && authToken) { authToken = null; store.set('auth', null); }
       if (res && res.room) return;
       if (res && res.resume) return askResume(res.resume);
@@ -279,6 +279,7 @@
   }
   socket.on('connect', () => {
     connOk();
+    socket.emit('visible', { visible: !document.hidden });
     if (voice.on) { voiceStop(true); toast('Voice terputus, ketuk 🎤 untuk sambung lagi'); }
     hello();
   });
@@ -513,6 +514,7 @@
   }
   $('#logoutBtn').onclick = async () => {
     if (!(await ask({ title: 'Keluar akun?', text: 'Kamu bisa masuk lagi kapan saja.', ok: 'Keluar' }))) return;
+    await pushOff(true).catch(() => {}); // this device stops getting the account's invites
     try { await api('/logout', { method: 'POST' }); } catch {}
     logoutLocal();
     socket.disconnect(); socket.connect();
@@ -1698,7 +1700,7 @@
         '<button class="btn green small" data-accept="' + f.id + '">Terima</button><button class="btn ghost small dark" data-remove="' + f.id + '" data-kind="decline">Tolak</button>')).join('') : '') +
       '<h4>Teman (' + F.friends.length + ')</h4>' +
       (F.friends.length ? F.friends.map((f) => {
-        const canInvite = inRoom && f.presence.online && f.presence.room !== V.code;
+        const canInvite = inRoom && f.presence.room !== V.code; // offline friends get a notification
         return friendRow(f,
           '<button class="btn blue small" data-chat="' + f.id + '">💬' + (f.unread ? ' <span class="badge">' + f.unread + '</span>' : '') + '</button>' +
           '<button class="btn green small" data-invite="' + f.id + '"' + (canInvite ? '' : ' disabled') + ' title="' + (inRoom ? 'Undang ke meja ' + V.code : 'Masuk meja dulu untuk mengundang') + '">✉️ Undang</button>' +
@@ -1783,6 +1785,123 @@
     if (V) { leftCode = V.code; V = null; } // the server moves us from the old table
     joinRoom(inv.room);
   });
+
+  // ---------- invite notifications: Web Push in browsers, Firebase in the Android app ----------
+  // The server only sends them when none of the player's devices has the game on screen.
+  const nativePush = () => {
+    const C = window.Capacitor;
+    return C && C.isNativePlatform && C.isNativePlatform() && C.isPluginAvailable && C.isPluginAvailable('PushNotifications') ? C.Plugins.PushNotifications : null;
+  };
+  const webPushOk = () => !nativePush() && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  let pushCfg = null, pushState = 'unsupported', swReg = null; // pushState: on | off | denied | unsupported
+  const keyBytes = (s) => { const raw = atob((s + '='.repeat((4 - (s.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
+  function renderPushBtn() {
+    const b = $('#pushBtn');
+    b.classList.toggle('hidden', !me.user || pushState === 'unsupported');
+    b.textContent = { on: '🔔 Notifikasi aktif', off: '🔕 Nyalakan notifikasi', denied: '🔕 Notifikasi diblokir' }[pushState] || '🔔 Notifikasi';
+  }
+  // tapped an invite notification: go to that table
+  async function openInviteRoom(room) {
+    room = String(room || '').toUpperCase();
+    if (!/^[A-Z0-9]{5}$/.test(room) || (V && V.code === room)) return;
+    if (!me.user) { setRoomUrl(room); return; } // joined right after login (room from the URL)
+    if (V && (V.state === 'playing' || V.state === 'result' || (V.gameLog || []).length)) {
+      const ok = await ask({ title: '✉️ Pindah Meja?', text: 'Gabung ke meja ' + room + '? Kamu keluar dari permainan di meja ' + V.code + ' (kartumu tidak dimainkan lagi, poin tetap dihitung).', ok: 'Gabung', cancel: 'Tetap di sini' });
+      if (!ok) return;
+    }
+    voiceStop();
+    if (V) { leftCode = V.code; V = null; }
+    joinRoom(room);
+  }
+  let nativeReady = false;
+  function nativeListeners(NP) {
+    if (nativeReady) return;
+    nativeReady = true;
+    NP.addListener('registration', async ({ value }) => {
+      try { await api('/push/subscribe', { method: 'POST', body: { kind: 'fcm', token: value } }); store.set('fcmToken', value); pushState = 'on'; }
+      catch (e) { console.warn('push', e.message); }
+      renderPushBtn();
+    });
+    NP.addListener('registrationError', (e) => { console.warn('push registration', e && e.error); pushState = 'off'; renderPushBtn(); });
+    NP.addListener('pushNotificationActionPerformed', (a) => { const d = (a && a.notification && a.notification.data) || {}; if (d.room) openInviteRoom(d.room); });
+  }
+  if (nativePush()) nativeListeners(nativePush()); // early, so tapping a notification that starts the app is not missed
+  async function webSubscribe() {
+    swReg = swReg || (await navigator.serviceWorker.register('/sw.js'));
+    let sub = await swReg.pushManager.getSubscription();
+    const key = keyBytes(pushCfg.vapidPublicKey);
+    const same = (k) => k && new Uint8Array(k).every((v, i) => v === key[i]) && new Uint8Array(k).length === key.length;
+    if (sub && !same(sub.options && sub.options.applicationServerKey)) { await sub.unsubscribe().catch(() => {}); sub = null; }
+    sub = sub || (await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }));
+    await api('/push/subscribe', { method: 'POST', body: { kind: 'web', subscription: sub.toJSON() } });
+    pushState = 'on';
+  }
+  // after login: register this device if notifications are allowed; the app asks once by itself
+  async function pushInit() {
+    if (!me.user) return;
+    try { pushCfg = pushCfg || (await api('/push/config')); } catch { return; }
+    try {
+      const NP = nativePush();
+      if (NP) {
+        if (!pushCfg.android) { pushState = 'unsupported'; return; }
+        nativeListeners(NP);
+        let perm = await NP.checkPermissions();
+        if (/^prompt/.test(perm.receive) && !store.get('pushAsked', false)) { store.set('pushAsked', true); perm = await NP.requestPermissions(); }
+        if (perm.receive === 'granted') {
+          await NP.createChannel({ id: 'invites', name: 'Undangan main', description: 'Undangan teman untuk gabung ke meja', importance: 5, visibility: 1, vibration: true }).catch(() => {});
+          await NP.register();
+          pushState = 'on';
+        } else pushState = perm.receive === 'denied' ? 'denied' : 'off';
+        return;
+      }
+      if (!webPushOk() || !pushCfg.web) { pushState = 'unsupported'; return; }
+      swReg = swReg || (await navigator.serviceWorker.register('/sw.js'));
+      if (Notification.permission === 'granted') await webSubscribe();
+      else pushState = Notification.permission === 'denied' ? 'denied' : 'off';
+    } catch (e) { console.warn('push', e.message); if (pushState === 'unsupported') pushState = 'off'; }
+    finally { renderPushBtn(); }
+  }
+  async function pushOn() {
+    const NP = nativePush();
+    if (NP) {
+      const perm = await NP.requestPermissions();
+      if (perm.receive !== 'granted') { pushState = 'denied'; return toast('Izinkan notifikasi Capsa Banting di Pengaturan HP → Aplikasi → Notifikasi', true); }
+      await NP.createChannel({ id: 'invites', name: 'Undangan main', importance: 5, visibility: 1, vibration: true }).catch(() => {});
+      await NP.register();
+      pushState = 'on';
+      return toast('🔔 Notifikasi undangan aktif');
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { pushState = perm === 'denied' ? 'denied' : 'off'; return toast(perm === 'denied' ? 'Notifikasi diblokir. Izinkan lewat ikon gembok di samping alamat web → Notifikasi.' : 'Notifikasi belum diizinkan', true); }
+    await webSubscribe();
+    toast('🔔 Notifikasi undangan aktif. Teman bisa mengundangmu walau game sedang ditutup.');
+  }
+  async function pushOff(silent) {
+    const NP = nativePush();
+    if (NP) {
+      const token = store.get('fcmToken', null);
+      if (token) await api('/push/unsubscribe', { method: 'POST', body: { token } }).catch(() => {});
+      await NP.unregister().catch(() => {});
+      store.set('fcmToken', null);
+    } else if (webPushOk() && swReg) {
+      const sub = await swReg.pushManager.getSubscription();
+      if (sub) { await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+    }
+    if (pushState === 'on') pushState = 'off';
+    if (!silent) { toast('🔕 Notifikasi undangan dimatikan di perangkat ini'); renderPushBtn(); }
+  }
+  $('#pushBtn').onclick = async () => {
+    try {
+      if (pushState === 'on') {
+        if (await ask({ title: '🔔 Notifikasi Undangan', text: 'Notifikasi aktif: kamu diberi tahu saat teman mengundang ke meja walau game sedang ditutup. Matikan di perangkat ini?', ok: 'Matikan', cancel: 'Biarkan' })) await pushOff();
+      } else if (pushState === 'denied' && !nativePush()) {
+        toast('Notifikasi diblokir. Izinkan lewat ikon gembok di samping alamat web → Notifikasi, lalu muat ulang.', true);
+      } else await pushOn();
+    } catch (e) { toast('Gagal: ' + e.message, true); }
+    renderPushBtn();
+  };
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'invite') openInviteRoom(e.data.room); });
+  document.addEventListener('visibilitychange', () => socket.emit('visible', { visible: !document.hidden }));
 
   // ---------- direct messages between friends ----------
   let dmWith = null, dmMsgs = [];

@@ -119,6 +119,20 @@ const SCHEMA = [
   )`,
   'create index if not exists reports_status on reports(status, id)',
   'alter table users add column if not exists banned_at timestamptz',
+  // push notifications: one row per device (web push endpoint URL, or Android FCM token)
+  `create table if not exists push_subs (
+    endpoint text primary key,
+    user_id integer not null references users(id) on delete cascade,
+    kind text not null,
+    data text,
+    created_at timestamptz not null default now()
+  )`,
+  'create index if not exists push_subs_user on push_subs(user_id)',
+  // server settings generated once (e.g. the web push key pair)
+  `create table if not exists app_settings (
+    key text primary key,
+    value text not null
+  )`,
   // live tables, so games survive server restarts / deploys / sleeping instances
   `create table if not exists live_rooms (
     code text primary key,
@@ -437,7 +451,27 @@ async function deleteAccount(userId) {
   return label;
 }
 
+// ---------- push notifications ----------
+async function savePushSub(userId, kind, endpoint, data) {
+  await q(`insert into push_subs (endpoint, user_id, kind, data) values ($1, $2, $3, $4)
+           on conflict (endpoint) do update set user_id = excluded.user_id, kind = excluded.kind, data = excluded.data, created_at = now()`,
+  [endpoint, userId, kind, data || null]);
+  // keep at most 10 devices per account
+  await q(`delete from push_subs where user_id = $1 and endpoint not in
+           (select endpoint from push_subs where user_id = $1 order by created_at desc limit 10)`, [userId]);
+}
+async function deletePushSub(endpoint, userId) {
+  if (userId) await q('delete from push_subs where endpoint = $1 and user_id = $2', [endpoint, userId]);
+  else await q('delete from push_subs where endpoint = $1', [endpoint]);
+}
+async function pushSubs(userId) { return q('select endpoint, kind, data from push_subs where user_id = $1', [userId]); }
+async function getSetting(key) { const r = await one('select value from app_settings where key = $1', [key]); return r ? r.value : null; }
+async function setSetting(key, value) {
+  await q('insert into app_settings (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value', [key, value]);
+}
+
 module.exports = {
+  savePushSub, deletePushSub, pushSubs, getSetting, setSetting,
   block, unblock, listBlocked, blockedEither, blockedIds, addReport, recentReportsBy, listReports, resolveReport, setBanned, isBanned, deleteAccount,
   savePhoto, getPhoto, deletePhoto,
   publicUser, relation, listPresets, countPresets, savePreset, deletePreset,

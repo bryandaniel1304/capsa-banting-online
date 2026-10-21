@@ -46,7 +46,7 @@ async function until(fn, ms = 120000, what = 'condition') {
 }
 
 (async () => {
-  for (let i = 0; i < 100; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
   const L = await signup('lia', 'Lia'), M = await signup('mia', 'Mia'), N = await signup('nia', 'Nia');
   const l = client(L.token), m = client(M.token), n = client(N.token);
   n.autoReady = false;
@@ -100,7 +100,7 @@ async function until(fn, ms = 120000, what = 'condition') {
   await sleep(100);
   assert(l.view.seats[mSeat].sitOut, 'Mia left for good');
   l.emit('proposeEnd');
-  await sleep(150);
+  for (let i = 0; i < 60 && !l.view.endVote; i++) await sleep(50); // slow machines: wait for the vote to arrive
   assert(l.view.endVote, 'ending allowed mid-game after someone left');
   assert.deepEqual(l.view.endVote.waiting, ['Nia'], 'Nia (back) votes, Mia does not');
   n.emit('voteEnd', { agree: true });

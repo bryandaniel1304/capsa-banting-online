@@ -21,7 +21,7 @@ const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(
 const dataUrl = (buf, mime = 'image/jpeg') => 'data:' + mime + ';base64,' + buf.toString('base64');
 
 (async () => {
-  for (let i = 0; i < 100; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
   const A = (await api('/signup', { method: 'POST', body: { username: 'foto', password: 'rahasia1', name: 'Foto' } })).data;
   const s = io(url, { transports: ['websocket'] });
   s.on('state', (v) => (s.view = v));

@@ -33,7 +33,7 @@ const play = async (s, cards) => { const r = await call(s, 'play', { cards: C(ca
 const pass = async (s) => { const r = await call(s, 'pass'); assert(!r.error, 'pass: ' + r.error); await sleep(120); };
 
 (async () => {
-  for (let i = 0; i < 100; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(150); } }
   const A = await signup('ana'), B = await signup('budi');
   const a = client(A.token), b = client(B.token);
   await a.hello(); await b.hello();

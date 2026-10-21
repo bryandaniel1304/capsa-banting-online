@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node test/sim.js && node test/restart.js && node test/away.js && node test/rules.js && node test/ceki.js && node test/extras.js && node test/leave.js && node test/photo.js && node test/autopass.js && node test/safety.js"
+    "test": "node test/sim.js && node test/restart.js && node test/away.js && node test/rules.js && node test/ceki.js && node test/extras.js && node test/leave.js && node test/photo.js && node test/autopass.js && node test/safety.js && node test/push.js"
   },
   "engines": {
     "node": ">=18"
@@ -15,7 +15,8 @@
     "@electric-sql/pglite": "^0.5.8",
     "express": "^4.21.2",
     "pg": "^8.23.1",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.1"

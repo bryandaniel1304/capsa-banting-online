@@ -88,7 +88,7 @@ function client(name) {
 }
 
 (async () => {
-  for (let i = 0; i < 50; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+  for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
 
   // ----- accounts -----
   const su = await api('/signup', { method: 'POST', body: { username: 'ana', password: 'rahasia1', name: 'Ana', avatar: '🐼' } });

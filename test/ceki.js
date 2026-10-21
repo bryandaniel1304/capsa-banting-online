@@ -20,7 +20,7 @@ async function scenario(name, hands, rules, moves) {
     stdio: ['ignore', 'ignore', 'inherit'],
   });
   try {
-    for (let i = 0; i < 60; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
+    for (let i = 0; i < 400; i++) { try { await fetch(url + '/healthz'); break; } catch { await sleep(200); } }
     const signup = async (u) => (await (await fetch(url + '/api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: 'rahasia1', name: u }) })).json()).token;
     const a = io(url, { transports: ['websocket'] }), b = io(url, { transports: ['websocket'] });
     a.on('state', (v) => (a.v = v)); b.on('state', (v) => (b.v = v));

@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const store = require('./store');
 const R = require('./shared/rules');
+const push = require('./push');
 
 const AVATARS = ['🦊', '🐼', '🐯', '🐸', '🐵', '🐨', '🐰', '🐻', '🦁', '🐷', '🐙', '🦄'];
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,20}$/;
@@ -343,6 +344,33 @@ function router(hooks = {}) {
       if (!id || id === req.user.id) return res.status(400).json({ error: 'Akun tidak valid' });
       await store.setBanned(id, banned);
       if (banned) onAccountGone(id, { deleted: false });
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- push notifications (invites) ----------
+  r.get('/push/config', (req, res) => res.json(push.config()));
+  r.post('/push/subscribe', auth, async (req, res, next) => {
+    try {
+      const { kind, subscription, token } = req.body || {};
+      if (kind === 'web') {
+        const sub = subscription || {};
+        if (!/^https:\/\/[^\s]{10,1000}$/.test(String(sub.endpoint || '')) || !sub.keys || typeof sub.keys.p256dh !== 'string' || typeof sub.keys.auth !== 'string') {
+          return res.status(400).json({ error: 'Langganan notifikasi tidak valid' });
+        }
+        const clean = { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh.slice(0, 200), auth: sub.keys.auth.slice(0, 100) } };
+        await store.savePushSub(req.user.id, 'web', clean.endpoint, JSON.stringify(clean));
+      } else if (kind === 'fcm') {
+        if (typeof token !== 'string' || token.length < 20 || token.length > 4096) return res.status(400).json({ error: 'Token notifikasi tidak valid' });
+        await store.savePushSub(req.user.id, 'fcm', token, null);
+      } else return res.status(400).json({ error: 'Jenis notifikasi tidak dikenal' });
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+  r.post('/push/unsubscribe', auth, async (req, res, next) => {
+    try {
+      const endpoint = String((req.body || {}).endpoint || (req.body || {}).token || '');
+      if (endpoint) await store.deletePushSub(endpoint, req.user.id);
       res.json({ ok: true });
     } catch (e) { next(e); }
   });

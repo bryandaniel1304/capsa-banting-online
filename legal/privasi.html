@@ -24,6 +24,8 @@
     <li><b>Chat dan reaksi di meja</b>: dikirim langsung ke pemain di meja yang sama dan tidak disimpan permanen. Jika seorang pemain dilaporkan,
       beberapa pesan terakhirnya di meja tersebut dilampirkan ke laporan untuk ditinjau moderator.</li>
     <li><b>Laporan dan blokir</b>: siapa yang kamu blokir, dan laporan yang kamu kirim (alasan dan keterangan).</li>
+    <li><b>Notifikasi</b> (opsional): jika kamu menyalakan notifikasi undangan, kami menyimpan token / alamat langganan notifikasi
+      perangkatmu. Token dihapus saat kamu mematikan notifikasi, keluar akun, atau menghapus akun.</li>
     <li><b>Data teknis</b>: alamat IP dan log server, dipakai untuk keamanan (misalnya membatasi percobaan login) dan memperbaiki gangguan.</li>
   </ul>
 
@@ -41,7 +43,8 @@
 
   <h2>4. Pihak lain yang memproses data</h2>
   <p>Data hanya dibagikan ke penyedia infrastruktur yang menjalankan layanan ini atas nama kami:
-  Render (server aplikasi), Supabase (database), dan penyedia server relay suara bila diaktifkan. Data bisa disimpan di luar Indonesia.
+  Render (server aplikasi), Supabase (database), penyedia server relay suara bila diaktifkan, serta layanan notifikasi
+  (Google Firebase Cloud Messaging untuk aplikasi Android dan layanan push bawaan browser) yang hanya menerima isi undangan. Data bisa disimpan di luar Indonesia.
   Kami juga akan membuka data jika diwajibkan oleh hukum.</p>
 
   <h2>5. Berapa lama data disimpan</h2>
