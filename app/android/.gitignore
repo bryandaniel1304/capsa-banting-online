@@ -104,3 +104,6 @@ app/src/main/res/xml/config.xml
 keystore.properties
 *.jks
 *.keystore
+
+# Firebase config (contains the app API key; the GitHub repo is public)
+google-services.json
